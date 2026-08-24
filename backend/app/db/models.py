@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import (
-    Boolean, CheckConstraint, ForeignKey, Identity, Integer, Numeric,
+    Boolean, CheckConstraint, DateTime, ForeignKey, Identity, Integer, Numeric,
     String, Text, UniqueConstraint, func,
 )
 from sqlalchemy import Enum as SAEnum
@@ -15,7 +15,9 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
 class Base(DeclarativeBase):
-    pass
+    type_annotation_map = {
+        datetime: DateTime(timezone=True),
+    }
 
 
 def _uuid_pk() -> Mapped[uuid.UUID]:
@@ -212,14 +214,14 @@ class User(Base):
     email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     full_name: Mapped[str] = mapped_column(String(255), nullable=False)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
-    role: Mapped[Role] = mapped_column(SAEnum(Role, name="role"), nullable=False)
-    clearance: Mapped[Clearance | None] = mapped_column(SAEnum(Clearance, name="clearance"), nullable=True)
+    role: Mapped[Role] = mapped_column(SAEnum(Role, name="role", values_callable=lambda x: [e.value for e in x]), nullable=False)
+    clearance: Mapped[Clearance | None] = mapped_column(SAEnum(Clearance, name="clearance", values_callable=lambda x: [e.value for e in x]), nullable=True)
     department: Mapped[str | None] = mapped_column(String(255), nullable=True)
     employee_ref: Mapped[str | None] = mapped_column(String(32), nullable=True)
     helpdesk_ref: Mapped[str | None] = mapped_column(String(32), nullable=True)
     specialization: Mapped[str | None] = mapped_column(String(255), nullable=True)
     escalation_authority: Mapped[EscalationAuthority | None] = mapped_column(
-        SAEnum(EscalationAuthority, name="escalation_authority"), nullable=True
+        SAEnum(EscalationAuthority, name="escalation_authority", values_callable=lambda x: [e.value for e in x]), nullable=True
     )
     shift: Mapped[str | None] = mapped_column(String(64), nullable=True)
     location: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -255,7 +257,7 @@ class Conversation(Base):
     guest_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     title: Mapped[str | None] = mapped_column(String(500), nullable=True)
     status: Mapped[ConversationStatus] = mapped_column(
-        SAEnum(ConversationStatus, name="conversation_status"), nullable=False,
+        SAEnum(ConversationStatus, name="conversation_status", values_callable=lambda x: [e.value for e in x]), nullable=False,
         default=ConversationStatus.ACTIVE,
     )
     created_at: Mapped[datetime] = mapped_column(server_default=func.now(), nullable=False)
@@ -269,7 +271,7 @@ class Message(Base):
 
     id: Mapped[uuid.UUID] = _uuid_pk()
     conversation_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("conversations.id"), nullable=False)
-    role: Mapped[MessageRole] = mapped_column(SAEnum(MessageRole, name="message_role"), nullable=False)
+    role: Mapped[MessageRole] = mapped_column(SAEnum(MessageRole, name="message_role", values_callable=lambda x: [e.value for e in x]), nullable=False)
     content: Mapped[dict] = mapped_column(JSONB, nullable=False)
     run_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("runs.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now(), nullable=False)
@@ -287,9 +289,9 @@ class Attachment(Base):
     size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
     sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     storage_path: Mapped[str] = mapped_column(String(1000), nullable=False)
-    kind: Mapped[AttachmentKind] = mapped_column(SAEnum(AttachmentKind, name="attachment_kind"), nullable=False)
+    kind: Mapped[AttachmentKind] = mapped_column(SAEnum(AttachmentKind, name="attachment_kind", values_callable=lambda x: [e.value for e in x]), nullable=False)
     parse_status: Mapped[ParseStatus] = mapped_column(
-        SAEnum(ParseStatus, name="parse_status"), nullable=False, default=ParseStatus.PENDING
+        SAEnum(ParseStatus, name="parse_status", values_callable=lambda x: [e.value for e in x]), nullable=False, default=ParseStatus.PENDING
     )
     parsed_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     parse_model: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -307,14 +309,14 @@ class Task(Base):
     user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     guest_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     title: Mapped[str] = mapped_column(String(500), nullable=False)
-    category: Mapped[TaskCategory] = mapped_column(SAEnum(TaskCategory, name="task_category"), nullable=False)
-    severity: Mapped[Severity] = mapped_column(SAEnum(Severity, name="severity"), nullable=False)
+    category: Mapped[TaskCategory] = mapped_column(SAEnum(TaskCategory, name="task_category", values_callable=lambda x: [e.value for e in x]), nullable=False)
+    severity: Mapped[Severity] = mapped_column(SAEnum(Severity, name="severity", values_callable=lambda x: [e.value for e in x]), nullable=False)
     summary: Mapped[str] = mapped_column(Text, nullable=False)
     affected_systems: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=False, default=list)
     evidence: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     classified_by_run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("runs.id"), nullable=False)
     resolution_path: Mapped[ResolutionPath] = mapped_column(
-        SAEnum(ResolutionPath, name="resolution_path"), nullable=False, default=ResolutionPath.PENDING
+        SAEnum(ResolutionPath, name="resolution_path", values_callable=lambda x: [e.value for e in x]), nullable=False, default=ResolutionPath.PENDING
     )
     created_at: Mapped[datetime] = mapped_column(server_default=func.now(), nullable=False)
 
@@ -333,9 +335,9 @@ class Ticket(Base):
     matched_specialization: Mapped[str] = mapped_column(String(255), nullable=False)
     assignment_rationale: Mapped[str] = mapped_column(Text, nullable=False)
     assignment_score: Mapped[float] = mapped_column(Numeric(6, 4), nullable=False)
-    priority: Mapped[TicketPriority] = mapped_column(SAEnum(TicketPriority, name="ticket_priority"), nullable=False)
+    priority: Mapped[TicketPriority] = mapped_column(SAEnum(TicketPriority, name="ticket_priority", values_callable=lambda x: [e.value for e in x]), nullable=False)
     status: Mapped[TicketStatus] = mapped_column(
-        SAEnum(TicketStatus, name="ticket_status"), nullable=False, default=TicketStatus.OPEN
+        SAEnum(TicketStatus, name="ticket_status", values_callable=lambda x: [e.value for e in x]), nullable=False, default=TicketStatus.OPEN
     )
     title: Mapped[str] = mapped_column(String(500), nullable=False)
     body: Mapped[str] = mapped_column(Text, nullable=False)
@@ -357,14 +359,14 @@ class ApprovalRequest(Base):
     task_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("tasks.id"), nullable=True)
     requester_user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     action_type: Mapped[ApprovalActionType] = mapped_column(
-        SAEnum(ApprovalActionType, name="approval_action_type"), nullable=False
+        SAEnum(ApprovalActionType, name="approval_action_type", values_callable=lambda x: [e.value for e in x]), nullable=False
     )
     action_payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
     justification: Mapped[str] = mapped_column(Text, nullable=False)
-    risk_level: Mapped[RiskLevel] = mapped_column(SAEnum(RiskLevel, name="risk_level"), nullable=False)
+    risk_level: Mapped[RiskLevel] = mapped_column(SAEnum(RiskLevel, name="risk_level", values_callable=lambda x: [e.value for e in x]), nullable=False)
     agent_summary: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[ApprovalStatus] = mapped_column(
-        SAEnum(ApprovalStatus, name="approval_status"), nullable=False, default=ApprovalStatus.PENDING
+        SAEnum(ApprovalStatus, name="approval_status", values_callable=lambda x: [e.value for e in x]), nullable=False, default=ApprovalStatus.PENDING
     )
     decided_by_user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     decided_at: Mapped[datetime | None] = mapped_column(nullable=True)
@@ -383,7 +385,7 @@ class OutboundEmail(Base):
     subject: Mapped[str] = mapped_column(String(500), nullable=False)
     body: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[EmailStatus] = mapped_column(
-        SAEnum(EmailStatus, name="email_status"), nullable=False, default=EmailStatus.QUEUED
+        SAEnum(EmailStatus, name="email_status", values_callable=lambda x: [e.value for e in x]), nullable=False, default=EmailStatus.QUEUED
     )
     smtp_response: Mapped[str | None] = mapped_column(Text, nullable=True)
     sent_at: Mapped[datetime | None] = mapped_column(nullable=True)
@@ -398,9 +400,9 @@ class Run(Base):
     id: Mapped[uuid.UUID] = _uuid_pk()
     conversation_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("conversations.id"), nullable=True)
     user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
-    trigger: Mapped[RunTrigger] = mapped_column(SAEnum(RunTrigger, name="run_trigger"), nullable=False)
+    trigger: Mapped[RunTrigger] = mapped_column(SAEnum(RunTrigger, name="run_trigger", values_callable=lambda x: [e.value for e in x]), nullable=False)
     status: Mapped[RunStatus] = mapped_column(
-        SAEnum(RunStatus, name="run_status"), nullable=False, default=RunStatus.RUNNING
+        SAEnum(RunStatus, name="run_status", values_callable=lambda x: [e.value for e in x]), nullable=False, default=RunStatus.RUNNING
     )
     started_at: Mapped[datetime] = mapped_column(server_default=func.now(), nullable=False)
     ended_at: Mapped[datetime | None] = mapped_column(nullable=True)
@@ -425,10 +427,10 @@ class Span(Base):
     run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("runs.id"), nullable=False)
     parent_span_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("spans.id"), nullable=True)
     sequence: Mapped[int] = mapped_column(Integer, nullable=False)
-    kind: Mapped[SpanKind] = mapped_column(SAEnum(SpanKind, name="span_kind"), nullable=False)
+    kind: Mapped[SpanKind] = mapped_column(SAEnum(SpanKind, name="span_kind", values_callable=lambda x: [e.value for e in x]), nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     status: Mapped[SpanStatus] = mapped_column(
-        SAEnum(SpanStatus, name="span_status"), nullable=False, default=SpanStatus.OK
+        SAEnum(SpanStatus, name="span_status", values_callable=lambda x: [e.value for e in x]), nullable=False, default=SpanStatus.OK
     )
     started_at: Mapped[datetime] = mapped_column(server_default=func.now(), nullable=False)
     ended_at: Mapped[datetime | None] = mapped_column(nullable=True)
@@ -449,7 +451,7 @@ class AuditLog(Base):
     __tablename__ = "audit_log"
 
     id: Mapped[uuid.UUID] = _uuid_pk()
-    actor_type: Mapped[ActorType] = mapped_column(SAEnum(ActorType, name="actor_type"), nullable=False)
+    actor_type: Mapped[ActorType] = mapped_column(SAEnum(ActorType, name="actor_type", values_callable=lambda x: [e.value for e in x]), nullable=False)
     actor_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     action: Mapped[str] = mapped_column(String(255), nullable=False)
     target_type: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -483,11 +485,11 @@ class Lesson(Base):
     file_path: Mapped[str] = mapped_column(String(1000), nullable=False)
     applies_to: Mapped[list[str]] = mapped_column(ARRAY(String), nullable=False, default=list)
     confidence: Mapped[LessonConfidence] = mapped_column(
-        SAEnum(LessonConfidence, name="lesson_confidence"), nullable=False
+        SAEnum(LessonConfidence, name="lesson_confidence", values_callable=lambda x: [e.value for e in x]), nullable=False
     )
     embedded_at: Mapped[datetime | None] = mapped_column(nullable=True)
     status: Mapped[LessonStatus] = mapped_column(
-        SAEnum(LessonStatus, name="lesson_status"), nullable=False, default=LessonStatus.ACTIVE
+        SAEnum(LessonStatus, name="lesson_status", values_callable=lambda x: [e.value for e in x]), nullable=False, default=LessonStatus.ACTIVE
     )
     created_by_run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("runs.id"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now(), nullable=False)
@@ -501,7 +503,7 @@ class Notification(Base):
     id: Mapped[uuid.UUID] = _uuid_pk()
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
     type: Mapped[NotificationType] = mapped_column(
-        SAEnum(NotificationType, name="notification_type"), nullable=False
+        SAEnum(NotificationType, name="notification_type", values_callable=lambda x: [e.value for e in x]), nullable=False
     )
     title: Mapped[str] = mapped_column(String(500), nullable=False)
     body: Mapped[str] = mapped_column(Text, nullable=False)
