@@ -1,26 +1,23 @@
 .PHONY: db-up db-create migrate seed dev test
 
-db-up:
-	@echo "Checking Postgres..."
-	@docker exec postgres18 pg_isready -U postgres || (echo "Postgres not reachable" && exit 1)
-	@echo "Checking Chroma..."
-	@curl -sf http://localhost:8000/api/v2/heartbeat > /dev/null || (echo "Chroma not reachable" && exit 1)
-	@echo "Both services healthy."
+# Every target below just delegates to backend/tasks.py, a cross-platform
+# Python task runner. Use that directly if `make` isn't installed:
+#   cd backend && uv run python tasks.py <db-up|db-create|migrate|seed|dev|test>
 
-# Idempotent: creates the `ticketing` database the app actually connects to
-# (the postgres18 container's default POSTGRES_DB is `mydb`, not `ticketing`).
-# Safe to run repeatedly, including against an already-set-up environment.
+db-up:
+	cd backend && uv run python tasks.py db-up
+
 db-create:
-	docker exec postgres18 psql -U postgres -tc "SELECT 1 FROM pg_database WHERE datname = 'ticketing'" | grep -q 1 || docker exec postgres18 psql -U postgres -c "CREATE DATABASE ticketing;"
+	cd backend && uv run python tasks.py db-create
 
 migrate:
-	cd backend && uv run alembic upgrade head
+	cd backend && uv run python tasks.py migrate
 
 seed:
-	cd backend && uv run python -m app.db.seed
+	cd backend && uv run python tasks.py seed
 
 dev:
-	cd backend && uv run uvicorn app.main:app --reload --host 127.0.0.1 --port 8080
+	cd backend && uv run python tasks.py dev
 
 test:
-	cd backend && uv run pytest -v
+	cd backend && uv run python tasks.py test
