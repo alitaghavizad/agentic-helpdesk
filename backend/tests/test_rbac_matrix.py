@@ -60,7 +60,7 @@ def test_standard_employee_sees_only_own_employee_record():
 def test_standard_employee_sees_only_routing_section_of_helpdesk():
     principal = _principal("employee", clearance="standard")
     result = retrieval_filter(principal, "helpdesk")
-    assert result == {"section": {"$in": ["Routing guidance"]}}
+    assert result == {"section": {"$in": ["Overview", "Routing guidance"]}}
 
 
 # -- employee / sensitive -----------------------------------------------------
@@ -78,7 +78,7 @@ def test_sensitive_employee_sees_own_record_or_department():
 
 def test_sensitive_employee_helpdesk_scope_same_as_standard():
     principal = _principal("employee", clearance="sensitive")
-    assert retrieval_filter(principal, "helpdesk") == {"section": {"$in": ["Routing guidance"]}}
+    assert retrieval_filter(principal, "helpdesk") == {"section": {"$in": ["Overview", "Routing guidance"]}}
 
 
 # -- employee / privileged ----------------------------------------------------

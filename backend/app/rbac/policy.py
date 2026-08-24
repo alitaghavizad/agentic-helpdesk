@@ -6,12 +6,14 @@ from app.db.models import Clearance, Role
 
 _KNOWN_ROLES = {r.value for r in Role}
 
-# The "helpdesk" collection is chunked by Markdown `##` heading at ingest
-# time (Phase 2 plan). "Routing guidance" is the heading name in every
-# helpdesk profile that carries routing-relevant information without
-# exposing the full support playbook. This constant is verified against
-# real ingested `section` metadata by the Phase 2 retrieval-eval gate.
-RESTRICTED_HELPDESK_SECTIONS = {"Routing guidance"}
+# A tuple, not a set: list(...) order must be deterministic since it feeds
+# a Chroma `$in` clause directly. "Overview" is the chunker's synthetic
+# frontmatter chunk (app.rag.chunking.OVERVIEW_SECTION) — it's where
+# "Primary specialization" actually lives in the source documents, since
+# that field has no "##" heading of its own. Together these two sections
+# satisfy spec section 6.2's "routing and specialization sections" grant
+# for standard/sensitive employees.
+RESTRICTED_HELPDESK_SECTIONS = ("Overview", "Routing guidance")
 
 ACCESS_CLASSIFICATION_MAP = {
     "Standard": Clearance.STANDARD,
