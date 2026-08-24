@@ -23,6 +23,13 @@ def _parse_fields(text: str) -> dict[str, str]:
     return {key.strip(): value.strip() for key, value in FIELD_RE.findall(text)}
 
 
+def _require_field(fields: dict[str, str], key: str, path: Path) -> str:
+    """Extract a required field from parsed file content, with filename context in errors."""
+    if key not in fields:
+        raise ValueError(f"{path.name}: missing required field {key!r}")
+    return fields[key]
+
+
 def _parse_employee_file(path: Path) -> dict:
     text = path.read_text(encoding="utf-8")
     fields = _parse_fields(text)
@@ -30,8 +37,8 @@ def _parse_employee_file(path: Path) -> dict:
     access_match = ACCESS_CLASS_RE.search(text)
     if not access_match:
         raise ValueError(f"{path.name}: no 'Access classification' line found")
-    employee_id = fields["Employee ID"]
-    email = fields["Corporate email"]
+    employee_id = _require_field(fields, "Employee ID", path)
+    email = _require_field(fields, "Corporate email", path)
     return {
         "username": email.split("@")[0],
         "email": email,
@@ -48,9 +55,10 @@ def _parse_helpdesk_file(path: Path) -> dict:
     text = path.read_text(encoding="utf-8")
     fields = _parse_fields(text)
     name_match = NAME_RE.search(text)
-    helpdesk_id = fields["Helpdesk ID"]
+    helpdesk_id = _require_field(fields, "Helpdesk ID", path)
     display_name = name_match.group(1).strip() if name_match else helpdesk_id
     username = display_name.lower().replace(" ", ".")
+    escalation_authority_value = _require_field(fields, "Escalation authority", path)
     return {
         "username": username,
         "email": f"{username}@northstar.example",
@@ -59,7 +67,7 @@ def _parse_helpdesk_file(path: Path) -> dict:
         "helpdesk_ref": helpdesk_id,
         "specialization": fields.get("Primary specialization"),
         "escalation_authority": EscalationAuthority(
-            map_escalation_authority(fields["Escalation authority"])
+            map_escalation_authority(escalation_authority_value)
         ),
         "shift": fields.get("Shift"),
     }
