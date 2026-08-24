@@ -106,6 +106,20 @@ class McpChromaBackend:
             self._ready_event = None
             self._close_event = None
             self._session = None
+            # A startup failure is already raised to whichever caller was
+            # waiting in _ensure_session(), which -- as part of consuming it
+            # -- resets _startup_error (and _lifecycle_task) to None before
+            # aclose() could ever observe it. So if _startup_error is still
+            # set here, it can only be a fresh, never-surfaced teardown-time
+            # failure (e.g. ClientSession.__aexit__ or stdio_client.__aexit__
+            # raising while shutting the subprocess down) -- surface it
+            # instead of silently swallowing it.
+            teardown_error = self._startup_error
+            self._startup_error = None
+            if teardown_error is not None:
+                raise RuntimeError(
+                    f"chroma-mcp session teardown failed: {teardown_error!r}"
+                ) from teardown_error
 
     async def heartbeat(self) -> bool:
         try:
@@ -123,15 +137,19 @@ class McpChromaBackend:
             await session.call_tool("chroma_create_collection", {"collection_name": collection})
         except Exception:
             pass  # collection may already exist -- fine
-        try:
-            # chroma-mcp's own duplicate-id handling on chroma_add_documents
-            # isn't verified to replace existing content, so delete first
-            # to guarantee true upsert (replace-if-exists) semantics.
-            await session.call_tool(
-                "chroma_delete_documents", {"collection_name": collection, "ids": ids}
-            )
-        except Exception:
-            pass  # ids may not exist yet on first ingest -- fine
+        # chroma-mcp's own duplicate-id handling on chroma_add_documents isn't
+        # verified to replace existing content, so delete first to guarantee
+        # true upsert (replace-if-exists) semantics. Empirically (see Task 3
+        # report), deleting ids that don't exist yet does not raise and does
+        # not set is_error -- ChromaDB treats delete as a no-op-safe/
+        # idempotent operation on missing ids -- so we can check is_error
+        # directly and treat any error here as a genuine server-side failure,
+        # not a benign "ids don't exist yet on first ingest" case.
+        delete_result = await session.call_tool(
+            "chroma_delete_documents", {"collection_name": collection, "ids": ids}
+        )
+        if delete_result.is_error:
+            raise RuntimeError(f"chroma_delete_documents failed: {delete_result.content}")
         result = await session.call_tool(
             "chroma_add_documents",
             {

@@ -51,6 +51,20 @@ async def test_mcp_backend_query_respects_where_filter(mcp_backend):
         await mcp_backend.delete(collection, ids=ids)
 
 
+async def test_mcp_backend_upsert_raises_when_delete_errors(mcp_backend):
+    # "ab" is too short to be a valid Chroma collection name (Chroma requires
+    # 3-63 characters), so chroma_create_collection fails server-side with
+    # is_error=True -- which upsert()'s bare `except Exception: pass` around
+    # that call doesn't catch (it never raises, so there's nothing to catch)
+    # and the collection is never actually created. The subsequent
+    # chroma_delete_documents call then targets a nonexistent collection,
+    # which chroma-mcp also reports as a normal (non-raising) is_error=True
+    # result rather than an exception. upsert() must check that result and
+    # raise, rather than silently falling through to chroma_add_documents.
+    with pytest.raises(RuntimeError, match="chroma_delete_documents failed"):
+        await mcp_backend.upsert("ab", ids=["x"], documents=["doc"], metadatas=[{}])
+
+
 async def test_mcp_backend_upsert_is_idempotent_by_id(mcp_backend):
     collection = f"test_mcp_{uuid.uuid4().hex[:8]}"
     ids = ["c1"]
