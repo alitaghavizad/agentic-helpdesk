@@ -39,25 +39,52 @@ async def _ingest_collection(backend, collection: str, chunks: list) -> int:
     return len(chunks)
 
 
+def _check_dataset_dirs() -> None:
+    """Path.glob() on a nonexistent directory returns an empty iterator
+    rather than raising, which would otherwise make a missing/misconfigured
+    DATASET_DIR silently "succeed" with 0 chunks ingested. Fail loudly
+    instead."""
+    employees_dir = DATASET_DIR / "employees"
+    helpdesk_dir = DATASET_DIR / "helpdesk"
+    missing = [
+        str(p)
+        for p in (DATASET_DIR, employees_dir, helpdesk_dir)
+        if not p.is_dir()
+    ]
+    if missing:
+        raise FileNotFoundError(
+            "Dataset directory/directories not found: " + ", ".join(missing)
+        )
+
+
 async def main() -> None:
+    _check_dataset_dirs()
+
     backend = get_rag_backend()
-
-    employee_chunks = []
-    for path in sorted((DATASET_DIR / "employees").glob("EMP-*.md")):
-        employee_chunks.extend(chunk_employee_file(path))
-
-    helpdesk_chunks = []
-    for path in sorted((DATASET_DIR / "helpdesk").glob("HD-*.md")):
-        helpdesk_chunks.extend(chunk_helpdesk_file(path))
-
-    n_employees = await _ingest_collection(backend, "employees", employee_chunks)
-    n_helpdesk = await _ingest_collection(backend, "helpdesk", helpdesk_chunks)
-
-    print(f"Ingested {n_employees} employee chunks, {n_helpdesk} helpdesk chunks.", file=sys.stderr)
-
     aclose = getattr(backend, "aclose", None)
-    if aclose is not None:
-        await aclose()
+    try:
+        employee_chunks = []
+        for path in sorted((DATASET_DIR / "employees").glob("EMP-*.md")):
+            employee_chunks.extend(chunk_employee_file(path))
+
+        helpdesk_chunks = []
+        for path in sorted((DATASET_DIR / "helpdesk").glob("HD-*.md")):
+            helpdesk_chunks.extend(chunk_helpdesk_file(path))
+
+        if not employee_chunks and not helpdesk_chunks:
+            raise RuntimeError(
+                "No chunks found in either "
+                f"{DATASET_DIR / 'employees'} or {DATASET_DIR / 'helpdesk'} "
+                "-- refusing to silently 'succeed' with an empty ingestion."
+            )
+
+        n_employees = await _ingest_collection(backend, "employees", employee_chunks)
+        n_helpdesk = await _ingest_collection(backend, "helpdesk", helpdesk_chunks)
+
+        print(f"Ingested {n_employees} employee chunks, {n_helpdesk} helpdesk chunks.", file=sys.stderr)
+    finally:
+        if aclose is not None:
+            await aclose()
 
 
 if __name__ == "__main__":
