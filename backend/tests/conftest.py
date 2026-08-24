@@ -32,3 +32,21 @@ def db_session():
         session.close()
         outer_transaction.rollback()
         connection.close()
+
+
+from fastapi.testclient import TestClient
+
+from app.db.session import get_db as _get_db
+
+
+@pytest.fixture()
+def client(db_session):
+    from app.main import app
+
+    def _override_get_db():
+        yield db_session
+
+    app.dependency_overrides[_get_db] = _override_get_db
+    with TestClient(app) as test_client:
+        yield test_client
+    app.dependency_overrides.clear()
