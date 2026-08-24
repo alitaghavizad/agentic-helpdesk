@@ -24,6 +24,8 @@ def get_current_principal(
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid or expired token")
     if claims.get("type") != "access":
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid token type")
+    if "kind" not in claims or "role" not in claims:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid or expired token")
     return Principal(
         kind=claims["kind"],
         user_id=claims.get("user_id"),

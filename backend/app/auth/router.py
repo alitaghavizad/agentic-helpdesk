@@ -9,7 +9,7 @@ from pydantic import BaseModel, EmailStr
 
 from app.auth.security import (
     create_access_token, create_refresh_token, decode_token,
-    hash_refresh_token, verify_password,
+    hash_password, hash_refresh_token, verify_password,
 )
 from app.db.models import RefreshToken, User
 from app.deps import CurrentPrincipal, DbSession
@@ -19,6 +19,10 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 GENERIC_AUTH_ERROR = "Invalid username or password"
 REFRESH_COOKIE_NAME = "refresh_token"
 RefreshCookie = Annotated[str | None, Cookie(alias=REFRESH_COOKIE_NAME)]
+
+# Fixed dummy hash so verify_password always runs a real bcrypt comparison,
+# even for a nonexistent username — prevents timing-based user enumeration.
+_DUMMY_HASH = hash_password("dummy-password-for-timing-normalization")
 
 
 class LoginRequest(BaseModel):
@@ -75,7 +79,10 @@ def _issue_tokens(db: DbSession, response: Response, claims: dict, subject: str)
 @router.post("/login", response_model=TokenResponse)
 def login(payload: LoginRequest, response: Response, db: DbSession) -> TokenResponse:
     user = db.query(User).filter_by(username=payload.username).one_or_none()
-    if user is None or not user.is_active or not verify_password(payload.password, user.password_hash):
+    password_ok = verify_password(
+        payload.password, user.password_hash if user else _DUMMY_HASH
+    )
+    if user is None or not user.is_active or not password_ok:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, GENERIC_AUTH_ERROR)
     return _issue_tokens(db, response, _claims_for_user(user), subject=str(user.id))
 
