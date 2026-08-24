@@ -234,7 +234,7 @@ class RefreshToken(Base):
 
     id: Mapped[uuid.UUID] = _uuid_pk()
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
-    token_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     expires_at: Mapped[datetime] = mapped_column(nullable=False)
     revoked_at: Mapped[datetime | None] = mapped_column(nullable=True)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now(), nullable=False)
@@ -246,7 +246,7 @@ class Conversation(Base):
     __tablename__ = "conversations"
     __table_args__ = (
         CheckConstraint(
-            "(user_id IS NOT NULL) OR (guest_name IS NOT NULL AND guest_email IS NOT NULL)",
+            "(user_id IS NOT NULL) <> (guest_name IS NOT NULL AND guest_email IS NOT NULL)",
             name="ck_conversations_requester_present",
         ),
     )
@@ -425,7 +425,7 @@ class Span(Base):
 
     id: Mapped[uuid.UUID] = _uuid_pk()
     run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("runs.id"), nullable=False)
-    parent_span_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("spans.id"), nullable=True)
+    parent_span_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("spans.id"), nullable=True, index=True)
     sequence: Mapped[int] = mapped_column(Integer, nullable=False)
     kind: Mapped[SpanKind] = mapped_column(SAEnum(SpanKind, name="span_kind", values_callable=lambda x: [e.value for e in x]), nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)

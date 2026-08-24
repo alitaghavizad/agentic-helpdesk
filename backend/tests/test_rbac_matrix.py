@@ -100,6 +100,44 @@ def test_privileged_employee_sees_full_helpdesk_documents():
     assert retrieval_filter(principal, "helpdesk") == {}
 
 
+# -- employee: missing employee_ref must fail closed, never emit None --------
+
+@pytest.mark.parametrize("clearance", ["standard", "sensitive", "privileged"])
+def test_employee_with_no_employee_ref_is_denied_not_null_filtered(clearance):
+    principal = _principal("employee", clearance=clearance, employee_ref=None)
+    with pytest.raises(RetrievalDenied):
+        retrieval_filter(principal, "employees")
+
+
+# -- employee: missing department must never appear as a None-valued clause --
+# Documented choice: a sensitive/privileged employee with department=None is
+# scoped to their own employee_id only; the "$or" department clause is
+# omitted rather than emitting {"department": None}.
+
+def test_sensitive_employee_with_no_department_falls_back_to_own_record_only():
+    principal = _principal(
+        "employee", clearance="sensitive", employee_ref="EMP-042", department=None,
+    )
+    result = retrieval_filter(principal, "employees")
+    assert result == {"employee_id": "EMP-042"}
+    assert "department" not in str(result) or "None" not in str(result)
+    for clause in result.get("$or", []):
+        assert None not in clause.values()
+
+
+def test_privileged_employee_with_no_department_omits_own_department_clause():
+    principal = _principal(
+        "employee", clearance="privileged", employee_ref="EMP-001", department=None,
+    )
+    result = retrieval_filter(principal, "employees")
+    assert result == {"$or": [
+        {"employee_id": "EMP-001"},
+        {"department": {"$nin": ["HR", "Legal"]}},
+    ]}
+    for clause in result["$or"]:
+        assert None not in clause.values()
+
+
 # -- helpdesk ------------------------------------------------------------------
 
 def test_helpdesk_sees_only_requesters_on_their_tickets():

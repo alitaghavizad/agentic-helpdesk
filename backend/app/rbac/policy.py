@@ -90,14 +90,29 @@ def retrieval_filter(
         return {"employee_id": {"$in": ids}}
 
     if principal.role == "employee":
+        if principal.employee_ref is None:
+            raise RetrievalDenied("employee principal has no employee_ref")
+
         if principal.clearance == Clearance.STANDARD.value:
             return {"employee_id": principal.employee_ref}
         if principal.clearance == Clearance.SENSITIVE.value:
+            # A principal with no department is scoped to their own record
+            # only — the "$or" department clause is omitted rather than
+            # including a None value (Chroma has no null-equality semantics,
+            # and including one risks silently widening or erroring instead
+            # of scoping down).
+            if principal.department is None:
+                return {"employee_id": principal.employee_ref}
             return {"$or": [
                 {"employee_id": principal.employee_ref},
                 {"department": principal.department},
             ]}
         if principal.clearance == Clearance.PRIVILEGED.value:
+            if principal.department is None:
+                return {"$or": [
+                    {"employee_id": principal.employee_ref},
+                    {"department": {"$nin": ["HR", "Legal"]}},
+                ]}
             return {"$or": [
                 {"employee_id": principal.employee_ref},
                 {"department": principal.department},

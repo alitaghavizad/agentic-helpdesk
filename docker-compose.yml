@@ -4,6 +4,12 @@
 # existed. `make db-up` therefore health-checks those containers rather
 # than invoking `docker compose up`. Use this file if you tear the
 # environment down and want to bring it back up from a clean slate.
+#
+# Clean-slate sequence: this container's POSTGRES_DB is `mydb`, not the
+# `ticketing` database the app actually connects to, so bringing this up
+# alone is not enough. Run, in order:
+#   docker compose up -d && make db-create && make migrate && make seed
+# See README.md for details.
 services:
   postgres18:
     image: postgres:18
