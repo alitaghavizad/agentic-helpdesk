@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from app.db.models import Clearance
+from app.db.models import Clearance, Role
+
+_KNOWN_ROLES = {r.value for r in Role}
 
 # The "helpdesk" collection is chunked by Markdown `##` heading at ingest
 # time (Phase 2 plan). "Routing guidance" is the heading name in every
@@ -62,6 +64,9 @@ def retrieval_filter(
     """
     if collection not in ("employees", "helpdesk", "lessons"):
         raise ValueError(f"unknown collection: {collection!r}")
+
+    if principal.role not in _KNOWN_ROLES:
+        raise RetrievalDenied(f"unrecognized role: {principal.role!r}")
 
     if principal.role == "guest":
         raise RetrievalDenied(f"guests cannot search {collection!r}")

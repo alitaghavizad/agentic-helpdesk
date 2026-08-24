@@ -147,3 +147,10 @@ def test_unknown_collection_raises_value_error():
     principal = _principal("admin")
     with pytest.raises(ValueError):
         retrieval_filter(principal, "not_a_real_collection")
+
+
+@pytest.mark.parametrize("collection", ["employees", "helpdesk", "lessons"])
+def test_unrecognized_role_raises_on_every_collection(collection):
+    principal = _principal("superuser")
+    with pytest.raises(RetrievalDenied):
+        retrieval_filter(principal, collection)
