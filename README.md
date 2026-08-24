@@ -16,7 +16,7 @@ wrapper around `backend/tasks.py`, a cross-platform Python runner with no
 extra dependencies — use it directly:
 
 ```sh
-cd backend && uv run python tasks.py <db-up|db-create|migrate|seed|dev|test>
+cd backend && uv run python tasks.py <db-up|db-create|migrate|seed|dev|test|ingest>
 ```
 
 Anywhere this doc says `make <target>`, that's equivalent to
@@ -43,6 +43,7 @@ environment.
 - `make db-create` — create the `ticketing` database if it doesn't exist
 - `make migrate` — run Alembic migrations (`backend/alembic`)
 - `make seed` — load seed data
+- `make ingest` — chunk and load `corporate_rag_dataset/` into Chroma (idempotent)
 - `make dev` — run the FastAPI dev server on `$BACKEND_HOST:$BACKEND_PORT`
   (from `.env`, default `127.0.0.1:8080`)
 - `make test` — run the backend test suite

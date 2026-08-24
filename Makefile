@@ -1,8 +1,8 @@
-.PHONY: db-up db-create migrate seed dev test
+.PHONY: db-up db-create migrate seed dev test ingest
 
 # Every target below just delegates to backend/tasks.py, a cross-platform
 # Python task runner. Use that directly if `make` isn't installed:
-#   cd backend && uv run python tasks.py <db-up|db-create|migrate|seed|dev|test>
+#   cd backend && uv run python tasks.py <db-up|db-create|migrate|seed|dev|test|ingest>
 
 db-up:
 	cd backend && uv run python tasks.py db-up
@@ -21,3 +21,6 @@ dev:
 
 test:
 	cd backend && uv run python tasks.py test
+
+ingest:
+	cd backend && uv run python tasks.py ingest
