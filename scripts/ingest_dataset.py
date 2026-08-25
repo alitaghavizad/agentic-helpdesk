@@ -15,8 +15,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend"))
 
+from app.db.models import RunStatus, RunTrigger  # noqa: E402
 from app.rag.chunking import chunk_employee_file, chunk_helpdesk_file  # noqa: E402
 from app.rag.backend import get_rag_backend  # noqa: E402
+from app.tracing import end_run, start_run  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DATASET_DIR = REPO_ROOT / "corporate_rag_dataset"
@@ -62,26 +64,41 @@ async def main() -> None:
 
     backend = get_rag_backend()
     aclose = getattr(backend, "aclose", None)
+    # McpChromaBackend's upsert() now wraps every MCP call in a tracing span
+    # (Task 3 of docs/superpowers/plans/2026-08-25-agent.md), and span()
+    # hard-requires an active run -- see app/tracing/spans.py's module
+    # docstring. This script has no per-conversation "turn" of its own, so
+    # it brackets its whole ingestion pass as one RunTrigger.INGEST_EVAL run
+    # (that trigger value exists in app/db/models.py for exactly this kind
+    # of batch job), mirroring the try/except/finally contract the tracing
+    # module itself documents as mandatory for every start_run()/end_run()
+    # pair.
+    handle = start_run(RunTrigger.INGEST_EVAL)
     try:
-        employee_chunks = []
-        for path in sorted((DATASET_DIR / "employees").glob("EMP-*.md")):
-            employee_chunks.extend(chunk_employee_file(path))
+        try:
+            employee_chunks = []
+            for path in sorted((DATASET_DIR / "employees").glob("EMP-*.md")):
+                employee_chunks.extend(chunk_employee_file(path))
 
-        helpdesk_chunks = []
-        for path in sorted((DATASET_DIR / "helpdesk").glob("HD-*.md")):
-            helpdesk_chunks.extend(chunk_helpdesk_file(path))
+            helpdesk_chunks = []
+            for path in sorted((DATASET_DIR / "helpdesk").glob("HD-*.md")):
+                helpdesk_chunks.extend(chunk_helpdesk_file(path))
 
-        if not employee_chunks and not helpdesk_chunks:
-            raise RuntimeError(
-                "No chunks found in either "
-                f"{DATASET_DIR / 'employees'} or {DATASET_DIR / 'helpdesk'} "
-                "-- refusing to silently 'succeed' with an empty ingestion."
-            )
+            if not employee_chunks and not helpdesk_chunks:
+                raise RuntimeError(
+                    "No chunks found in either "
+                    f"{DATASET_DIR / 'employees'} or {DATASET_DIR / 'helpdesk'} "
+                    "-- refusing to silently 'succeed' with an empty ingestion."
+                )
 
-        n_employees = await _ingest_collection(backend, "employees", employee_chunks)
-        n_helpdesk = await _ingest_collection(backend, "helpdesk", helpdesk_chunks)
+            n_employees = await _ingest_collection(backend, "employees", employee_chunks)
+            n_helpdesk = await _ingest_collection(backend, "helpdesk", helpdesk_chunks)
 
-        print(f"Ingested {n_employees} employee chunks, {n_helpdesk} helpdesk chunks.", file=sys.stderr)
+            print(f"Ingested {n_employees} employee chunks, {n_helpdesk} helpdesk chunks.", file=sys.stderr)
+            end_run(handle, status=RunStatus.OK)
+        except Exception as exc:
+            end_run(handle, status=RunStatus.ABORTED, error=str(exc))
+            raise
     finally:
         if aclose is not None:
             await aclose()

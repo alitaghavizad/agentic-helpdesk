@@ -5,6 +5,32 @@ import pytest
 from app.rag.mcp_client import McpChromaBackend
 
 
+@pytest.fixture(autouse=True)
+def _traced_run(cleanup_run):
+    """McpChromaBackend now wraps every MCP call in a tracing span (Task 3),
+    and span() hard-requires an active run (see app/tracing/spans.py's
+    module docstring) -- it raises RuntimeError otherwise. None of this
+    file's tests started a run before tracing existed, so without this
+    fixture every test below would break, not just the new spans test.
+    Autouse + module-local keeps this invisible to each test's own body:
+    tests that don't care about spans get a run for free (its spans, if
+    any, are cleaned up here); the dedicated spans test below starts its
+    own inner run on top of this one (contextvars nest correctly) so it
+    can assert on exactly its own run's trace."""
+    from app.db.models import RunStatus, RunTrigger
+    from app.tracing import end_run, start_run
+
+    handle = start_run(RunTrigger.CHAT_TURN)
+    try:
+        yield
+        end_run(handle, status=RunStatus.OK)
+    except Exception:
+        end_run(handle, status=RunStatus.ABORTED)
+        raise
+    finally:
+        cleanup_run(handle.run_id)
+
+
 @pytest.fixture()
 async def mcp_backend():
     backend = McpChromaBackend()
@@ -115,3 +141,32 @@ async def test_mcp_backend_upsert_is_idempotent_by_id(mcp_backend, drop_chroma_c
     finally:
         await mcp_backend.delete(collection, ids=ids)
         drop_chroma_collection(collection)
+
+
+async def test_mcp_backend_upsert_and_query_record_mcp_spans(mcp_backend, cleanup_run):
+    from app.db.models import RunTrigger, SpanKind
+    from app.tracing import end_run, start_run, trace_tree
+
+    collection = f"test_mcp_spans_{uuid.uuid4().hex[:8]}"
+    ids = ["c1"]
+    handle = start_run(RunTrigger.CHAT_TURN)
+    try:
+        await mcp_backend.upsert(collection, ids=ids, documents=["hello"], metadatas=[{"k": "v"}])
+        await mcp_backend.query(collection, "hello", where=None, k=1)
+        await mcp_backend.delete(collection, ids=ids)
+        end_run(handle, status="ok")
+
+        trace = trace_tree(handle.run_id)
+        span_names = [node.span.name for node in trace.roots]
+        span_kinds = {node.span.kind for node in trace.roots}
+        assert span_kinds == {SpanKind.MCP}
+        assert span_names == [
+            "chroma_mcp.chroma_create_collection",
+            "chroma_mcp.chroma_delete_documents",
+            "chroma_mcp.chroma_add_documents",
+            "chroma_mcp.chroma_query_documents",
+            "chroma_mcp.chroma_delete_documents",
+        ]
+        assert all(node.span.duration_ms is not None and node.span.duration_ms >= 0 for node in trace.roots)
+    finally:
+        cleanup_run(handle.run_id)

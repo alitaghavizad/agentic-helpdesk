@@ -21,7 +21,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend"))
 
+from app.db.models import RunStatus, RunTrigger  # noqa: E402
 from app.rag.backend import get_rag_backend  # noqa: E402
+from app.tracing import end_run, start_run  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 EVAL_DIR = REPO_ROOT / "corporate_rag_dataset" / "evaluation"
@@ -97,36 +99,48 @@ async def run_eval() -> dict:
     do with the numbers."""
     backend = get_rag_backend()
     aclose = getattr(backend, "aclose", None)
+    # See the matching comment in scripts/ingest_dataset.py's main(): every
+    # McpChromaBackend call is now wrapped in a tracing span (Task 3 of
+    # docs/superpowers/plans/2026-08-25-agent.md), which hard-requires an
+    # active run. This script brackets its whole evaluation pass as one
+    # RunTrigger.INGEST_EVAL run for the same reason.
+    handle = start_run(RunTrigger.INGEST_EVAL)
     try:
-        queries = _load_queries()
+        try:
+            queries = _load_queries()
 
-        per_query_results = []
-        for q in queries:
-            relevant = set(q["relevant_docs"])
-            graded = q["graded_relevance"]
-            ranked_docs = await _retrieve_ranked_documents(backend, q["query"])
+            per_query_results = []
+            for q in queries:
+                relevant = set(q["relevant_docs"])
+                graded = q["graded_relevance"]
+                ranked_docs = await _retrieve_ranked_documents(backend, q["query"])
 
-            per_query_results.append(
-                {
-                    "query_id": q["query_id"],
-                    "query": q["query"],
-                    "recall@5": _recall_at_k(ranked_docs, relevant, 5),
-                    "recall@10": _recall_at_k(ranked_docs, relevant, 10),
-                    "reciprocal_rank": _reciprocal_rank(ranked_docs, relevant),
-                    "ndcg@10": _ndcg_at_k(ranked_docs, graded, 10),
-                }
-            )
+                per_query_results.append(
+                    {
+                        "query_id": q["query_id"],
+                        "query": q["query"],
+                        "recall@5": _recall_at_k(ranked_docs, relevant, 5),
+                        "recall@10": _recall_at_k(ranked_docs, relevant, 10),
+                        "reciprocal_rank": _reciprocal_rank(ranked_docs, relevant),
+                        "ndcg@10": _ndcg_at_k(ranked_docs, graded, 10),
+                    }
+                )
 
-        n = len(per_query_results)
+            n = len(per_query_results)
 
-        return {
-            "n": n,
-            "recall@5": sum(r["recall@5"] for r in per_query_results) / n,
-            "recall@10": sum(r["recall@10"] for r in per_query_results) / n,
-            "mrr": sum(r["reciprocal_rank"] for r in per_query_results) / n,
-            "ndcg@10": sum(r["ndcg@10"] for r in per_query_results) / n,
-            "per_query": per_query_results,
-        }
+            summary = {
+                "n": n,
+                "recall@5": sum(r["recall@5"] for r in per_query_results) / n,
+                "recall@10": sum(r["recall@10"] for r in per_query_results) / n,
+                "mrr": sum(r["reciprocal_rank"] for r in per_query_results) / n,
+                "ndcg@10": sum(r["ndcg@10"] for r in per_query_results) / n,
+                "per_query": per_query_results,
+            }
+            end_run(handle, status=RunStatus.OK)
+            return summary
+        except Exception as exc:
+            end_run(handle, status=RunStatus.ABORTED, error=str(exc))
+            raise
     finally:
         if aclose is not None:
             await aclose()

@@ -8,7 +8,9 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 from app.config import get_settings
+from app.db.models import SpanKind
 from app.rag.backend import QueryResult
+from app.tracing import span
 
 
 def _parse_chroma_url(url: str) -> tuple[str, int]:
@@ -134,7 +136,9 @@ class McpChromaBackend:
     ) -> None:
         session = await self._ensure_session()
         try:
-            await session.call_tool("chroma_create_collection", {"collection_name": collection})
+            async with span(SpanKind.MCP, "chroma_mcp.chroma_create_collection") as recorder:
+                recorder.input = {"collection_name": collection}
+                await session.call_tool("chroma_create_collection", {"collection_name": collection})
         except Exception:
             pass  # collection may already exist -- fine
         # chroma-mcp's own duplicate-id handling on chroma_add_documents isn't
@@ -145,20 +149,24 @@ class McpChromaBackend:
         # idempotent operation on missing ids -- so we can check is_error
         # directly and treat any error here as a genuine server-side failure,
         # not a benign "ids don't exist yet on first ingest" case.
-        delete_result = await session.call_tool(
-            "chroma_delete_documents", {"collection_name": collection, "ids": ids}
-        )
+        async with span(SpanKind.MCP, "chroma_mcp.chroma_delete_documents") as recorder:
+            recorder.input = {"collection_name": collection, "ids": ids}
+            delete_result = await session.call_tool(
+                "chroma_delete_documents", {"collection_name": collection, "ids": ids}
+            )
         if delete_result.is_error:
             raise RuntimeError(f"chroma_delete_documents failed: {delete_result.content}")
-        result = await session.call_tool(
-            "chroma_add_documents",
-            {
-                "collection_name": collection,
-                "documents": documents,
-                "ids": ids,
-                "metadatas": metadatas,
-            },
-        )
+        async with span(SpanKind.MCP, "chroma_mcp.chroma_add_documents") as recorder:
+            recorder.input = {"collection_name": collection, "ids": ids}
+            result = await session.call_tool(
+                "chroma_add_documents",
+                {
+                    "collection_name": collection,
+                    "documents": documents,
+                    "ids": ids,
+                    "metadatas": metadatas,
+                },
+            )
         if result.is_error:
             raise RuntimeError(f"chroma_add_documents failed: {result.content}")
 
@@ -166,15 +174,22 @@ class McpChromaBackend:
         self, collection: str, query_text: str, where: dict | None, k: int
     ) -> QueryResult:
         session = await self._ensure_session()
-        result = await session.call_tool(
-            "chroma_query_documents",
-            {
+        async with span(SpanKind.MCP, "chroma_mcp.chroma_query_documents") as recorder:
+            recorder.input = {
                 "collection_name": collection,
                 "query_texts": [query_text],
                 "n_results": k,
-                "where": where or None,
-            },
-        )
+                "where": where,
+            }
+            result = await session.call_tool(
+                "chroma_query_documents",
+                {
+                    "collection_name": collection,
+                    "query_texts": [query_text],
+                    "n_results": k,
+                    "where": where or None,
+                },
+            )
         payload = _parse_tool_result(result)
         return QueryResult(
             ids=payload["ids"][0],
@@ -185,9 +200,11 @@ class McpChromaBackend:
 
     async def delete(self, collection: str, ids: list[str]) -> None:
         session = await self._ensure_session()
-        result = await session.call_tool(
-            "chroma_delete_documents", {"collection_name": collection, "ids": ids}
-        )
+        async with span(SpanKind.MCP, "chroma_mcp.chroma_delete_documents") as recorder:
+            recorder.input = {"collection_name": collection, "ids": ids}
+            result = await session.call_tool(
+                "chroma_delete_documents", {"collection_name": collection, "ids": ids}
+            )
         if result.is_error:
             raise RuntimeError(f"chroma_delete_documents failed: {result.content}")
 

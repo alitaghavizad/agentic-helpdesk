@@ -1,5 +1,7 @@
 import uuid
 
+import pytest
+
 from app.rag.direct_client import DirectChromaBackend
 from app.rag.mcp_client import McpChromaBackend
 
@@ -8,6 +10,27 @@ FIXTURE_DOCS = [
     ("d2", "Quarterly revenue increased by twelve percent.", {"topic": "finance"}),
     ("d3", "The mitochondria is the powerhouse of the cell.", {"topic": "biology"}),
 ]
+
+
+@pytest.fixture(autouse=True)
+def _traced_run(cleanup_run):
+    """McpChromaBackend now wraps every MCP call in a tracing span (Task 3),
+    and span() hard-requires an active run -- see the identical fixture and
+    comment in test_rag_mcp_backend.py for the full rationale. This file's
+    tests exercise McpChromaBackend the same way, so they need the same
+    run-context bracketing."""
+    from app.db.models import RunStatus, RunTrigger
+    from app.tracing import end_run, start_run
+
+    handle = start_run(RunTrigger.CHAT_TURN)
+    try:
+        yield
+        end_run(handle, status=RunStatus.OK)
+    except Exception:
+        end_run(handle, status=RunStatus.ABORTED)
+        raise
+    finally:
+        cleanup_run(handle.run_id)
 
 
 async def _seed(backend, collection: str) -> None:
