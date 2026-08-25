@@ -4,9 +4,8 @@ import uuid
 
 import pytest
 
-from app.db.models import Conversation, ResolutionPath, RunStatus, RunTrigger, TaskCategory, TicketPriority
+from app.db.models import Conversation, ResolutionPath, Run, RunStatus, RunTrigger, TaskCategory, TicketPriority
 from app.tickets.service import create_ticket, record_task
-from app.tracing import end_run, start_run
 
 
 def _make_conversation(db_session):
@@ -17,35 +16,21 @@ def _make_conversation(db_session):
     return conv
 
 
-def _make_run():
-    """Creates one real, committed Run row (app.tracing.store commits on its
-    own connection independent of db_session's transaction) so
-    Task.classified_by_run_id's FK is satisfiable.
-
-    Deliberately does NOT delete the row afterwards via the `cleanup_run`
-    fixture, unlike every other test in this codebase that creates a Run.
-    Those other tests only ever reference the run from tracing's own
-    tables (Run/Span); these tests additionally INSERT a Task row *through
-    db_session* whose classified_by_run_id column FK-references this run.
-    Postgres takes a FOR KEY SHARE lock on the referenced `runs` row for
-    the referencing transaction's full lifetime -- and db_session's
-    transaction (see conftest.db_session: an outer `connection.begin()`
-    that individual `db.commit()` calls only savepoint into, never
-    actually ending) does not end until the fixture's own teardown runs
-    *after* this test function returns. Any attempt to delete the run row
-    from cleanup_run's separate connection before then -- whether inline,
-    in a `finally`, or via `request.addfinalizer` (which still fires
-    before db_session's fixture-level rollback) -- blocks on that lock for
-    the lifetime of the test process, i.e. hangs. So this run row is left
-    behind as a harmless orphan; only its id is needed for the FK."""
-    handle = start_run(RunTrigger.CHAT_TURN)
-    end_run(handle, status=RunStatus.OK)
-    return handle.run_id
+def _make_run(db_session) -> uuid.UUID:
+    """Created directly via db_session rather than tracing.start_run()/end_run()
+    so it lives in the same savepoint transaction as the Task/Ticket rows and
+    rolls back automatically -- avoids a real Postgres FK-lock deadlock between
+    db_session's held transaction and cleanup_run's separate-connection DELETE."""
+    run = Run(trigger=RunTrigger.CHAT_TURN, status=RunStatus.OK)
+    db_session.add(run)
+    db_session.commit()
+    db_session.refresh(run)
+    return run.id
 
 
 def test_record_task_creates_row_with_pending_resolution_path(db_session):
     conv = _make_conversation(db_session)
-    run_id = _make_run()
+    run_id = _make_run(db_session)
 
     task = record_task(
         db_session, conversation_id=conv.id, user_id=None, guest_email=conv.guest_email,
@@ -62,7 +47,7 @@ def test_record_task_creates_row_with_pending_resolution_path(db_session):
 
 def test_create_ticket_succeeds_for_valid_task(db_session):
     conv = _make_conversation(db_session)
-    run_id = _make_run()
+    run_id = _make_run(db_session)
     task = record_task(
         db_session, conversation_id=conv.id, user_id=None, guest_email=conv.guest_email,
         title="VPN issue", category=TaskCategory.VPN_NETWORK, severity="medium",
@@ -95,7 +80,7 @@ def test_create_ticket_raises_for_nonexistent_task(db_session):
 def test_create_ticket_raises_when_task_belongs_to_different_conversation(db_session):
     conv = _make_conversation(db_session)
     other_conv = _make_conversation(db_session)
-    run_id = _make_run()
+    run_id = _make_run(db_session)
     task = record_task(
         db_session, conversation_id=conv.id, user_id=None, guest_email=conv.guest_email,
         title="t", category=TaskCategory.OTHER, severity="low", summary="s",
@@ -113,7 +98,7 @@ def test_create_ticket_raises_when_task_belongs_to_different_conversation(db_ses
 
 def test_create_ticket_raises_when_task_already_has_a_ticket(db_session):
     conv = _make_conversation(db_session)
-    run_id = _make_run()
+    run_id = _make_run(db_session)
     task = record_task(
         db_session, conversation_id=conv.id, user_id=None, guest_email=conv.guest_email,
         title="t", category=TaskCategory.OTHER, severity="low", summary="s",
