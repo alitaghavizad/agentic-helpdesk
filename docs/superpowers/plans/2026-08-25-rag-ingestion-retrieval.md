@@ -1557,6 +1557,8 @@ outcome instead of failing permanently.
 
 ## Self-Review
 
+*(Note: §7.3's 0.7 gate is discussed below as originally planned/executed via Task 6. The actual accepted outcome — Recall@5 = 0.6958, just under 0.70, formally accepted as final rather than continuing to chase the threshold — is documented in the "Post-implementation note" section above this one; read that section for the real, final result.)*
+
 **Spec coverage.** §7.1 (three collections, chunking metadata, default embedding function) → Task 1. §7.2 (idempotent ingestion keyed on source_file+chunk_index) → Task 5. §7.3 (Recall@5/10, MRR, nDCG@10, 10 worst queries, 0.7 build-blocking gate) → Task 6, with an explicit non-negotiable-threshold instruction rather than a vague "aim for good recall." §7.4 (both backends implement the same interface; MCP via the official SDK over stdio; MCP server never exposed to the model directly) → Tasks 2–4; the "never exposed to the model" half is structurally satisfied by this plan simply not building any agent-facing tool wrapper — that's Phase 4's job, out of this plan's scope by design. The Foundation plan's one parked finding (helpdesk section-scope narrower than spec §6.2) is resolved in Task 1, not silently left open.
 
 **Placeholder scan.** No TBD/TODO. Two explicitly-flagged empirical unknowns exist (chroma-mcp's exact duplicate-id and re-create-collection behavior, Task 3) — these are not placeholders; they're real gaps in third-party documentation that the plan handles defensively and instructs the implementer to verify against the live server rather than guess further, exactly as Foundation's Task 3 handled Alembic's autogenerate output.

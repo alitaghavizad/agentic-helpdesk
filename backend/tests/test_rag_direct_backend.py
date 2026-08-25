@@ -8,7 +8,7 @@ async def test_direct_backend_heartbeat():
     assert await backend.heartbeat() is True
 
 
-async def test_direct_backend_upsert_and_query_roundtrip():
+async def test_direct_backend_upsert_and_query_roundtrip(drop_chroma_collection):
     backend = DirectChromaBackend()
     collection = f"test_direct_{uuid.uuid4().hex[:8]}"
     ids = ["c1", "c2"]
@@ -24,9 +24,10 @@ async def test_direct_backend_upsert_and_query_roundtrip():
         assert result["metadatas"][0]["topic"] == "sky"
     finally:
         await backend.delete(collection, ids=ids)
+        drop_chroma_collection(collection)
 
 
-async def test_direct_backend_query_respects_where_filter():
+async def test_direct_backend_query_respects_where_filter(drop_chroma_collection):
     backend = DirectChromaBackend()
     collection = f"test_direct_{uuid.uuid4().hex[:8]}"
     ids = ["c1", "c2"]
@@ -41,9 +42,10 @@ async def test_direct_backend_query_respects_where_filter():
         assert result["ids"] == ["c2"]
     finally:
         await backend.delete(collection, ids=ids)
+        drop_chroma_collection(collection)
 
 
-async def test_direct_backend_upsert_is_idempotent_by_id():
+async def test_direct_backend_upsert_is_idempotent_by_id(drop_chroma_collection):
     backend = DirectChromaBackend()
     collection = f"test_direct_{uuid.uuid4().hex[:8]}"
     ids = ["c1"]
@@ -55,3 +57,4 @@ async def test_direct_backend_upsert_is_idempotent_by_id():
         assert result["metadatas"][0]["v"] == 2
     finally:
         await backend.delete(collection, ids=ids)
+        drop_chroma_collection(collection)

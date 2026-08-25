@@ -10,7 +10,7 @@ import eval_retrieval  # noqa: E402
 #
 # For the pytest suite, though, the achieved number against this dataset is 0.6958,
 # accepted as documented in docs/superpowers/plans/2026-08-25-rag-ingestion-retrieval.md's
-# Self-Review section: a real chunking bug (boilerplate "Support context" text producing
+# Post-implementation note section: a real chunking bug (boilerplate "Support context" text producing
 # semantic ties across unrelated employee documents) was found and fixed via identity-
 # prefixed chunk text, closing most of the gap (0.6854 -> 0.6958). The remainder was
 # diagnosed as an eval-dataset artifact, not a retrieval defect: ~7 "which employees use

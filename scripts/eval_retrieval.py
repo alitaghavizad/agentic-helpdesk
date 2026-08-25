@@ -96,38 +96,40 @@ async def run_eval() -> dict:
     sys.exit -- callers (main() below, and the pytest test) decide what to
     do with the numbers."""
     backend = get_rag_backend()
-    queries = _load_queries()
-
-    per_query_results = []
-    for q in queries:
-        relevant = set(q["relevant_docs"])
-        graded = q["graded_relevance"]
-        ranked_docs = await _retrieve_ranked_documents(backend, q["query"])
-
-        per_query_results.append(
-            {
-                "query_id": q["query_id"],
-                "query": q["query"],
-                "recall@5": _recall_at_k(ranked_docs, relevant, 5),
-                "recall@10": _recall_at_k(ranked_docs, relevant, 10),
-                "reciprocal_rank": _reciprocal_rank(ranked_docs, relevant),
-                "ndcg@10": _ndcg_at_k(ranked_docs, graded, 10),
-            }
-        )
-
-    n = len(per_query_results)
     aclose = getattr(backend, "aclose", None)
-    if aclose is not None:
-        await aclose()
+    try:
+        queries = _load_queries()
 
-    return {
-        "n": n,
-        "recall@5": sum(r["recall@5"] for r in per_query_results) / n,
-        "recall@10": sum(r["recall@10"] for r in per_query_results) / n,
-        "mrr": sum(r["reciprocal_rank"] for r in per_query_results) / n,
-        "ndcg@10": sum(r["ndcg@10"] for r in per_query_results) / n,
-        "per_query": per_query_results,
-    }
+        per_query_results = []
+        for q in queries:
+            relevant = set(q["relevant_docs"])
+            graded = q["graded_relevance"]
+            ranked_docs = await _retrieve_ranked_documents(backend, q["query"])
+
+            per_query_results.append(
+                {
+                    "query_id": q["query_id"],
+                    "query": q["query"],
+                    "recall@5": _recall_at_k(ranked_docs, relevant, 5),
+                    "recall@10": _recall_at_k(ranked_docs, relevant, 10),
+                    "reciprocal_rank": _reciprocal_rank(ranked_docs, relevant),
+                    "ndcg@10": _ndcg_at_k(ranked_docs, graded, 10),
+                }
+            )
+
+        n = len(per_query_results)
+
+        return {
+            "n": n,
+            "recall@5": sum(r["recall@5"] for r in per_query_results) / n,
+            "recall@10": sum(r["recall@10"] for r in per_query_results) / n,
+            "mrr": sum(r["reciprocal_rank"] for r in per_query_results) / n,
+            "ndcg@10": sum(r["ndcg@10"] for r in per_query_results) / n,
+            "per_query": per_query_results,
+        }
+    finally:
+        if aclose is not None:
+            await aclose()
 
 
 async def main() -> None:

@@ -16,7 +16,7 @@ wrapper around `backend/tasks.py`, a cross-platform Python runner with no
 extra dependencies — use it directly:
 
 ```sh
-cd backend && uv run python tasks.py <db-up|db-create|migrate|seed|dev|test|ingest>
+cd backend && uv run python tasks.py <db-up|db-create|migrate|seed|dev|test|ingest|eval>
 ```
 
 Anywhere this doc says `make <target>`, that's equivalent to

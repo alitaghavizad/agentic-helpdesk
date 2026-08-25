@@ -19,7 +19,7 @@ async def _seed(backend, collection: str) -> None:
     )
 
 
-async def test_mcp_and_direct_backends_return_equivalent_top_result():
+async def test_mcp_and_direct_backends_return_equivalent_top_result(drop_chroma_collection):
     suffix = uuid.uuid4().hex[:8]
     direct_collection = f"test_equiv_direct_{suffix}"
     mcp_collection = f"test_equiv_mcp_{suffix}"
@@ -43,9 +43,11 @@ async def test_mcp_and_direct_backends_return_equivalent_top_result():
         await direct.delete(direct_collection, ids=ids)
         await mcp.delete(mcp_collection, ids=ids)
         await mcp.aclose()
+        drop_chroma_collection(direct_collection)
+        drop_chroma_collection(mcp_collection)
 
 
-async def test_mcp_and_direct_backends_agree_on_where_filtering():
+async def test_mcp_and_direct_backends_agree_on_where_filtering(drop_chroma_collection):
     suffix = uuid.uuid4().hex[:8]
     direct_collection = f"test_equiv_direct_{suffix}"
     mcp_collection = f"test_equiv_mcp_{suffix}"
@@ -68,3 +70,36 @@ async def test_mcp_and_direct_backends_agree_on_where_filtering():
         await direct.delete(direct_collection, ids=ids)
         await mcp.delete(mcp_collection, ids=ids)
         await mcp.aclose()
+        drop_chroma_collection(direct_collection)
+        drop_chroma_collection(mcp_collection)
+
+
+async def test_mcp_and_direct_backends_agree_on_empty_where(drop_chroma_collection):
+    # Both backends must treat where={} identically to where=None (no
+    # filter applied). DirectChromaBackend already normalizes this
+    # (`where or None`); McpChromaBackend must do the same, since
+    # chroma-mcp's chroma_query_documents tool rejects a bare `{}` outright.
+    suffix = uuid.uuid4().hex[:8]
+    direct_collection = f"test_equiv_direct_{suffix}"
+    mcp_collection = f"test_equiv_mcp_{suffix}"
+    ids = [d[0] for d in FIXTURE_DOCS]
+
+    direct = DirectChromaBackend()
+    mcp = McpChromaBackend()
+    try:
+        await _seed(direct, direct_collection)
+        await _seed(mcp, mcp_collection)
+
+        direct_result = await direct.query(
+            direct_collection, "cell biology powerhouse", where={}, k=1
+        )
+        mcp_result = await mcp.query(mcp_collection, "cell biology powerhouse", where={}, k=1)
+
+        assert direct_result["ids"][0] == "d3"
+        assert mcp_result["ids"][0] == "d3"
+    finally:
+        await direct.delete(direct_collection, ids=ids)
+        await mcp.delete(mcp_collection, ids=ids)
+        await mcp.aclose()
+        drop_chroma_collection(direct_collection)
+        drop_chroma_collection(mcp_collection)

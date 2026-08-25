@@ -172,7 +172,7 @@ class McpChromaBackend:
                 "collection_name": collection,
                 "query_texts": [query_text],
                 "n_results": k,
-                "where": where,
+                "where": where or None,
             },
         )
         payload = _parse_tool_result(result)
@@ -185,9 +185,11 @@ class McpChromaBackend:
 
     async def delete(self, collection: str, ids: list[str]) -> None:
         session = await self._ensure_session()
-        await session.call_tool(
+        result = await session.call_tool(
             "chroma_delete_documents", {"collection_name": collection, "ids": ids}
         )
+        if result.is_error:
+            raise RuntimeError(f"chroma_delete_documents failed: {result.content}")
 
 
 def _parse_tool_result(result) -> dict:

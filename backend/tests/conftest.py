@@ -2,10 +2,13 @@ import subprocess
 import sys
 from pathlib import Path
 
+import chromadb
 import pytest
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.db.session import get_engine
+from app.rag.direct_client import _parse_chroma_url
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 
@@ -18,6 +21,30 @@ def _migrated_database():
         check=True,
     )
     yield
+
+
+@pytest.fixture()
+def drop_chroma_collection():
+    """Test-hygiene-only helper: deletes a Chroma collection directly via a
+    raw chromadb.HttpClient, bypassing RagBackend (neither RagBackend nor
+    either concrete backend exposes a delete_collection method -- adding one
+    to the public interface is out of scope for test cleanup). Collections
+    live on the same underlying Chroma server regardless of which backend
+    (direct or mcp) created them, so this works for both. Tests should call
+    the returned function in their `finally` blocks after deleting documents,
+    so repeated suite runs don't leak orphaned test_* collections into the
+    shared Chroma instance."""
+    settings = get_settings()
+    host, port = _parse_chroma_url(settings.chroma_url)
+    client = chromadb.HttpClient(host=host, port=port)
+
+    def _drop(name: str) -> None:
+        try:
+            client.delete_collection(name)
+        except Exception:
+            pass  # already gone / never created -- fine for cleanup
+
+    return _drop
 
 
 @pytest.fixture()
