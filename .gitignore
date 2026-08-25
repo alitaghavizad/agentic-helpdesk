@@ -10,3 +10,4 @@ build/
 .pytest_tmp/
 storage/uploads/
 .worktrees/
+.claude/worktrees/
