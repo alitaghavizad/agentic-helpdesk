@@ -1523,6 +1523,38 @@ git commit -m "Add retrieval evaluation gate script (Recall@5/10, MRR, nDCG@10)"
 
 ---
 
+## Post-implementation note: accepted Recall@5 baseline (2026-08-25)
+
+Task 6's gate was run for real against the live Chroma instance. The initial number was
+Recall@5 = 0.6854, below the 0.7 gate. Investigation found a real chunking bug: boilerplate
+"Support context" text shared across employee documents was creating semantic ties that
+outranked genuinely relevant chunks. This was fixed by prefixing each chunk with identifying
+text (employee name/role) before embedding, which raised Recall@5 to 0.6958 -- closing most
+of the gap but still short of 0.7.
+
+The remaining shortfall was diagnosed as an eval-dataset ground-truth-sampling artifact, not
+a retrieval defect, affecting roughly 7 of the 60 queries -- specifically "which employees use
+<tool>" enumeration queries. These queries' ground truth lists only a small, arbitrary sample
+of a much larger set of equally valid answers. For example Q047 ("Which employees use Slack?")
+lists 6 relevant docs, but 85 of the dataset's 100 employees actually have Slack listed among
+their tools, and nothing in the document content distinguishes the 6 "chosen" employees from
+the other 79 -- so no retrieval strategy operating on content alone can be expected to recover
+that exact 6-document ground-truth set inside the top 5. This diagnosis was verified directly
+against the live dataset and independently reproduced twice (once by the controller, once by a
+task reviewer).
+
+Given that the remaining gap is attributable to how the eval dataset's ground truth was
+sampled rather than to retrieval quality, the plan owner explicitly accepted Recall@5 = 0.6958
+as the final, documented result for this dataset, rather than continuing to chase 0.70 by
+further tuning against an artifact. The 0.70 figure remains the design's stated target (spec
+§7.3) and `scripts/eval_retrieval.py`'s `RECALL_5_GATE` is unchanged at 0.7, so `make eval`
+keeps reporting honestly against that target. The automated pytest gate
+(`backend/tests/test_eval_retrieval.py`) was updated separately to assert against the accepted
+0.69 floor (a small margin below 0.6958) so the suite reflects the documented, accepted
+outcome instead of failing permanently.
+
+---
+
 ## Self-Review
 
 **Spec coverage.** §7.1 (three collections, chunking metadata, default embedding function) → Task 1. §7.2 (idempotent ingestion keyed on source_file+chunk_index) → Task 5. §7.3 (Recall@5/10, MRR, nDCG@10, 10 worst queries, 0.7 build-blocking gate) → Task 6, with an explicit non-negotiable-threshold instruction rather than a vague "aim for good recall." §7.4 (both backends implement the same interface; MCP via the official SDK over stdio; MCP server never exposed to the model directly) → Tasks 2–4; the "never exposed to the model" half is structurally satisfied by this plan simply not building any agent-facing tool wrapper — that's Phase 4's job, out of this plan's scope by design. The Foundation plan's one parked finding (helpdesk section-scope narrower than spec §6.2) is resolved in Task 1, not silently left open.
