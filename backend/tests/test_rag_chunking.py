@@ -39,6 +39,13 @@ def test_chunk_employee_file_overview_chunk_contains_frontmatter_facts():
     assert "Engineering Manager" in overview.text
 
 
+def test_chunk_employee_file_every_chunk_text_has_identity_prefix():
+    chunks = chunk_employee_file(DATASET_DIR / "employees" / "EMP-001_Narek_Keller.md")
+    expected_prefix = "Employee: Narek Keller (EMP-001), Engineering, Engineering Manager.\n\n"
+    for chunk in chunks:
+        assert chunk.text.startswith(expected_prefix)
+
+
 def test_chunk_ids_are_stable_and_unique():
     chunks = chunk_employee_file(DATASET_DIR / "employees" / "EMP-001_Narek_Keller.md")
     ids = [c.id for c in chunks]
@@ -86,3 +93,13 @@ def test_chunk_helpdesk_file_overview_chunk_contains_specialization():
     overview = chunks[0]
     assert overview.section == OVERVIEW_SECTION
     assert "Identity and Access Management" in overview.text
+
+
+def test_chunk_helpdesk_file_every_chunk_text_has_identity_prefix():
+    chunks = chunk_helpdesk_file(DATASET_DIR / "helpdesk" / "HD-001_Noah_Taylor.md")
+    expected_prefix = (
+        "Helpdesk specialist: Noah Taylor (HD-001), L1 Support Specialist, "
+        "specializing in Identity and Access Management.\n\n"
+    )
+    for chunk in chunks:
+        assert chunk.text.startswith(expected_prefix)

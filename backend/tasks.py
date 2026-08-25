@@ -7,7 +7,7 @@ the stdlib and the packages already in this project — no new dependency.
 Run from the `backend/` directory:
     uv run python tasks.py <task>
 
-Tasks: db-up, db-create, migrate, seed, dev, test, ingest
+Tasks: db-up, db-create, migrate, seed, dev, test, ingest, eval
 
 The Makefile targets delegate to this script, so there is one implementation
 either way you invoke it.
@@ -88,6 +88,13 @@ def ingest() -> int:
     return subprocess.run([sys.executable, str(repo_root / "scripts" / "ingest_dataset.py")]).returncode
 
 
+def eval_retrieval() -> int:
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parent.parent
+    return subprocess.run([sys.executable, str(repo_root / "scripts" / "eval_retrieval.py")]).returncode
+
+
 TASKS = {
     "db-up": db_up,
     "db-create": db_create,
@@ -96,6 +103,7 @@ TASKS = {
     "dev": dev,
     "test": test,
     "ingest": ingest,
+    "eval": eval_retrieval,
 }
 
 

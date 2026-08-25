@@ -34,12 +34,14 @@ def _split_sections(body: str) -> list[tuple[str, str]]:
     return sections
 
 
-def _build_chunk(text: str, chunk_index: int, section: str, doc_metadata: dict) -> Chunk:
+def _build_chunk(
+    text: str, chunk_index: int, section: str, doc_metadata: dict, identity_prefix: str = ""
+) -> Chunk:
     metadata = {**doc_metadata, "section": section}
     source_file = doc_metadata["source_file"]
     return Chunk(
         id=f"{source_file}::chunk-{chunk_index}",
-        text=text,
+        text=identity_prefix + text,
         chunk_index=chunk_index,
         source_file=source_file,
         section=section,
@@ -47,14 +49,22 @@ def _build_chunk(text: str, chunk_index: int, section: str, doc_metadata: dict) 
     )
 
 
-def _chunk_document(text: str, doc_metadata: dict) -> list[Chunk]:
+def _chunk_document(text: str, doc_metadata: dict, identity_prefix: str = "") -> list[Chunk]:
+    """Split `text` into section chunks. `identity_prefix` (e.g. "Employee:
+    Jane Doe (EMP-042), Engineering, SRE.\n\n") is prepended to every chunk's
+    embedded text, applied uniformly including Overview. This is "contextual
+    chunking": it ensures every chunk carries identity signal even when a
+    section's own prose is generic/templated boilerplate shared across many
+    documents (e.g. helpdesk "representative issue" text), which otherwise
+    causes near-duplicate embeddings and ranking ties across unrelated docs.
+    """
     first_heading_pos = text.find("\n## ")
     overview_text = text[:first_heading_pos].strip() if first_heading_pos != -1 else text.strip()
-    chunks = [_build_chunk(overview_text, 0, OVERVIEW_SECTION, doc_metadata)]
+    chunks = [_build_chunk(overview_text, 0, OVERVIEW_SECTION, doc_metadata, identity_prefix)]
 
     body = text[first_heading_pos:] if first_heading_pos != -1 else ""
     for idx, (heading, section_text) in enumerate(_split_sections(body), start=1):
-        chunks.append(_build_chunk(section_text, idx, heading, doc_metadata))
+        chunks.append(_build_chunk(section_text, idx, heading, doc_metadata, identity_prefix))
     return chunks
 
 
@@ -66,17 +76,21 @@ def chunk_employee_file(path: Path) -> list[Chunk]:
         raise ValueError(f"{path.name}: no 'Access classification' line found")
 
     employee_id = require_field(fields, "Employee ID", path)
+    name = parse_name(text, fallback=employee_id)
+    department = fields.get("Department", "")
+    role = fields.get("Role", "")
     doc_metadata = {
         "employee_id": employee_id,
-        "name": parse_name(text, fallback=employee_id),
-        "department": fields.get("Department", ""),
-        "role": fields.get("Role", ""),
+        "name": name,
+        "department": department,
+        "role": role,
         "location": fields.get("Location", ""),
         "access_classification": map_access_classification(access_match.group(1)).value,
         "source_file": path.name,
         "doc_type": "employee",
     }
-    return _chunk_document(text, doc_metadata)
+    identity_prefix = f"Employee: {name} ({employee_id}), {department}, {role}.\n\n"
+    return _chunk_document(text, doc_metadata, identity_prefix)
 
 
 def chunk_helpdesk_file(path: Path) -> list[Chunk]:
@@ -85,14 +99,18 @@ def chunk_helpdesk_file(path: Path) -> list[Chunk]:
 
     helpdesk_id = require_field(fields, "Helpdesk ID", path)
     escalation_authority = require_field(fields, "Escalation authority", path)
+    name = parse_name(text, fallback=helpdesk_id)
+    role = fields.get("Role", "")
+    specialization = fields.get("Primary specialization", "")
     doc_metadata = {
         "helpdesk_id": helpdesk_id,
-        "name": parse_name(text, fallback=helpdesk_id),
-        "role": fields.get("Role", ""),
-        "specialization": fields.get("Primary specialization", ""),
+        "name": name,
+        "role": role,
+        "specialization": specialization,
         "shift": fields.get("Shift", ""),
         "escalation_authority": map_escalation_authority(escalation_authority),
         "source_file": path.name,
         "doc_type": "helpdesk",
     }
-    return _chunk_document(text, doc_metadata)
+    identity_prefix = f"Helpdesk specialist: {name} ({helpdesk_id}), {role}, specializing in {specialization}.\n\n"
+    return _chunk_document(text, doc_metadata, identity_prefix)

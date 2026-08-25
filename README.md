@@ -44,6 +44,7 @@ environment.
 - `make migrate` — run Alembic migrations (`backend/alembic`)
 - `make seed` — load seed data
 - `make ingest` — chunk and load `corporate_rag_dataset/` into Chroma (idempotent)
+- `make eval` — run the retrieval evaluation gate (Recall@5/10, MRR, nDCG@10; must be run after `make ingest`)
 - `make dev` — run the FastAPI dev server on `$BACKEND_HOST:$BACKEND_PORT`
   (from `.env`, default `127.0.0.1:8080`)
 - `make test` — run the backend test suite
