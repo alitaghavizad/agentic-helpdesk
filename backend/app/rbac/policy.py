@@ -27,6 +27,16 @@ class RetrievalDenied(PermissionError):
 
 
 @dataclass(frozen=True)
+class Allow:
+    pass
+
+
+@dataclass(frozen=True)
+class Deny:
+    reason: str
+
+
+@dataclass(frozen=True)
 class Principal:
     kind: str  # "user" | "guest"
     user_id: str | None
@@ -123,3 +133,22 @@ def retrieval_filter(
         raise RetrievalDenied(f"unrecognized clearance: {principal.clearance!r}")
 
     raise RetrievalDenied(f"unrecognized role: {principal.role!r}")
+
+
+# Tools a guest must never reach, regardless of arguments -- guests may chat
+# and file tickets (spec D9), but the people-collections and internal
+# helpdesk operational state (workload) are staff-only. Every other
+# allowed tool's real scoping already happens via retrieval_filter (search
+# tools) or row-ownership in the tool's own query (list_my_tickets,
+# get_ticket) -- authorize() does not need a bespoke rule for those.
+_GUEST_DENIED_TOOLS = frozenset({"search_knowledge", "search_lessons", "get_helpdesk_workload"})
+
+
+def authorize(principal: Principal, tool_name: str, arguments: dict) -> Allow | Deny:
+    """The single tested chokepoint every tool call passes through before
+    execution (spec section 6.3). `arguments` is accepted for a future
+    argument-level rule but unused by the current rule set -- every present
+    restriction is role-based only."""
+    if principal.role == "guest" and tool_name in _GUEST_DENIED_TOOLS:
+        return Deny(f"guests cannot use {tool_name!r}")
+    return Allow()
