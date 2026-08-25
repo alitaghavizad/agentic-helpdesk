@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import functools
 import inspect
+import sys
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Callable, TypeVar
@@ -119,18 +120,23 @@ class _ActiveSpan:
         status = SpanStatus.ERROR if exc is not None else SpanStatus.OK
         error_text = f"{type(exc).__name__}: {exc}" if exc is not None else None
 
-        cost = None
-        if self.recorder.model is not None:
-            cost = pricing.cost_for(
-                self.recorder.model,
-                input_tokens=self.recorder.input_tokens or 0,
-                output_tokens=self.recorder.output_tokens or 0,
-                cache_read_tokens=self.recorder.cache_read_tokens or 0,
-                cache_write_tokens=self.recorder.cache_write_tokens or 0,
-            )
+        # Everything below must not skip the frame reset in `finally`, even
+        # if it raises (e.g. pricing.cost_for on a malformed override, or
+        # some future failure appending to _pending_spans) -- an unpopped
+        # frame silently reparents every subsequent sibling span to this
+        # dead one for the rest of the run.
+        try:
+            cost = None
+            if self.recorder.model is not None:
+                cost = pricing.cost_for(
+                    self.recorder.model,
+                    input_tokens=self.recorder.input_tokens or 0,
+                    output_tokens=self.recorder.output_tokens or 0,
+                    cache_read_tokens=self.recorder.cache_read_tokens or 0,
+                    cache_write_tokens=self.recorder.cache_write_tokens or 0,
+                )
 
-        _pending_spans.setdefault(self._run.run_id, []).append(
-            dict(
+            kwargs = dict(
                 run_id=self._run.run_id,
                 span_id=self._span_id,
                 parent_span_id=self._parent_span_id,
@@ -152,8 +158,21 @@ class _ActiveSpan:
                 error=error_text,
                 metadata=self.recorder.metadata,
             )
-        )
-        reset_current_span_frame(self._frame_token)
+            # Use membership, not setdefault: if this run's buffer was
+            # already popped by end_run() (e.g. a fire-and-forget span that
+            # outlives its run), there is nowhere left this span will ever
+            # be flushed from -- recreating the entry would just leak it in
+            # _pending_spans forever. Drop it with a warning instead.
+            if self._run.run_id in _pending_spans:
+                _pending_spans[self._run.run_id].append(kwargs)
+            else:
+                print(
+                    f"WARNING: span {self.name!r} exited after its run "
+                    f"{self._run.run_id} already ended -- dropped",
+                    file=sys.stderr,
+                )
+        finally:
+            reset_current_span_frame(self._frame_token)
 
 
 class span:
@@ -161,13 +180,31 @@ class span:
     as `async with span(kind, name) as recorder:` to wrap an inline block.
     Either way, code running inside can call
     `app.tracing.current_span().record_usage(...)` to attach model/token
-    info before the span closes and is persisted."""
+    info before the span closes and is persisted.
+
+    The context-manager form is async-only -- there is no `__enter__`/
+    `__exit__`, so a plain `with span(...):` raises `TypeError`. This is by
+    design: this codebase's DB layer is sync throughout, and only inline
+    async blocks need the context-manager form at all (a sync block can
+    just use the decorator).
+
+    A `span(...)` instance is not safe to reuse concurrently or
+    recursively as a context manager -- each `__aenter__` overwrites the
+    same `self._active`, so a second concurrent use would clobber the
+    first's state. Construct a fresh instance per use; the idiomatic
+    `async with span(kind, name):` already does this correctly since it
+    constructs a new instance at each use site."""
 
     def __init__(self, kind: SpanKind | str, name: str) -> None:
         self.kind = kind if isinstance(kind, SpanKind) else SpanKind(kind)
         self.name = name
 
     def __call__(self, func: F) -> F:
+        if inspect.isasyncgenfunction(func):
+            raise TypeError(
+                "@span does not support async generator functions -- use "
+                "'async with span(...)' inside the generator body instead"
+            )
         if inspect.iscoroutinefunction(func):
 
             @functools.wraps(func)
@@ -222,11 +259,26 @@ def start_run(
 
 
 def end_run(handle: RunHandle, *, status: RunStatus | str, error: str | None = None) -> None:
+    """Flushes this run's buffered spans, finalizes the run, and cleans up
+    its contextvar token. All three steps happen even if the flush loop
+    raises partway through (e.g. a DB error on one span): whatever spans
+    DID get inserted are still reflected in the run's finalized rollup, the
+    run is never left stuck in RunStatus.RUNNING, and the token is always
+    popped -- a failure inserting span 3 of 10 must not also lose the
+    run-level bookkeeping for spans 1-2 or leak the contextvar token.
+
+    Calling this a second time on the same handle is a no-op: `.pop(...,
+    [])` on an already-popped run_id returns an empty list, so nothing is
+    re-flushed or double-inserted, though finalize_run/token cleanup still
+    run against already-final state harmlessly.
+    """
     status = status if isinstance(status, RunStatus) else RunStatus(status)
     pending = _pending_spans.pop(handle.run_id, [])
-    for kwargs in sorted(pending, key=lambda kwargs: kwargs["sequence"]):
-        store.insert_span(**kwargs)
-    store.finalize_run(run_id=handle.run_id, status=status, error=error)
-    token = _run_tokens.pop(handle.run_id, None)
-    if token is not None:
-        reset_current_run(token)
+    try:
+        for kwargs in sorted(pending, key=lambda kwargs: kwargs["sequence"]):
+            store.insert_span(**kwargs)
+    finally:
+        store.finalize_run(run_id=handle.run_id, status=status, error=error)
+        token = _run_tokens.pop(handle.run_id, None)
+        if token is not None:
+            reset_current_run(token)

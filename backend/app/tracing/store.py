@@ -46,8 +46,11 @@ def insert_span(
 ) -> None:
     """Inserts exactly one completed Span row. SpanStatus has no
     in-progress value, so a span is written once, at completion -- never
-    updated afterward. `input`/`output` are redacted here, automatically,
-    so no call site can forget to."""
+    updated afterward. `input`/`output`/`error`/`metadata` are all redacted
+    here, automatically, so no call site can forget to -- `metadata` is a
+    public, writable dict a caller can put anything into, and `error` is
+    built from an exception's own message, which routinely embeds secrets
+    (e.g. "AuthError: invalid key sk-...")."""
     Session = get_sessionmaker()
     with Session() as session:
         span = Span(
@@ -69,8 +72,8 @@ def insert_span(
             cache_read_tokens=cache_read_tokens,
             cache_write_tokens=cache_write_tokens,
             cost_usd=cost_usd,
-            error=error,
-            metadata_=metadata,
+            error=redact(error) if error is not None else None,
+            metadata_=redact(metadata),
         )
         session.add(span)
         session.commit()

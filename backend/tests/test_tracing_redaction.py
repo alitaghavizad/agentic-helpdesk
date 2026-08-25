@@ -84,3 +84,28 @@ def test_redact_still_catches_compound_secret_field_names():
         "user_secret": REDACTED,
     }
     assert redact(original) == expected
+
+
+def test_redact_catches_camelcase_secret_field_names():
+    """A lookaround-based word-boundary regex under IGNORECASE fails to see
+    the boundary between a lowercase letter and the uppercase start of a
+    camelCase hump (e.g. authToken), so camelCase secret field names were
+    silently passing through unredacted. Word-splitting must catch them."""
+    original = {
+        "authToken": "abc",
+        "dbPassword": "def",
+        "userSecret": "ghi",
+        "passwordHash": "jkl",
+        "accessToken": "mno",
+        "clientSecret": "pqr",
+        "sessionToken": "stu",
+    }
+    expected = {key: REDACTED for key in original}
+    assert redact(original) == expected
+
+
+def test_redact_does_not_match_camelcase_telemetry_field_names():
+    """camelCase telemetry names must not false-positive the way their
+    snake_case counterparts (input_tokens etc.) don't."""
+    original = {"inputTokens": 42, "outputTokens": 100}
+    assert redact(original) == original

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import json
-from decimal import Decimal
+import sys
+from decimal import Decimal, InvalidOperation
 
 from app.config import get_settings
 
@@ -23,12 +24,23 @@ def _rate_table() -> dict[str, dict[str, Decimal]]:
     table = {model: dict(rates) for model, rates in DEFAULT_RATES.items()}
     raw_overrides = get_settings().model_pricing_overrides
     if raw_overrides:
-        overrides = json.loads(raw_overrides)
-        for model, rates in overrides.items():
-            table[model] = {
-                "input": Decimal(str(rates["input"])),
-                "output": Decimal(str(rates["output"])),
+        try:
+            overrides = json.loads(raw_overrides)
+            parsed = {
+                model: {
+                    "input": Decimal(str(rates["input"])),
+                    "output": Decimal(str(rates["output"])),
+                }
+                for model, rates in overrides.items()
             }
+        except (ValueError, KeyError, TypeError, InvalidOperation):
+            print(
+                "WARNING: MODEL_PRICING_OVERRIDES is malformed, ignoring",
+                file=sys.stderr,
+                flush=True,
+            )
+        else:
+            table.update(parsed)
     return table
 
 

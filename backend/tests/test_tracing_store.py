@@ -46,6 +46,33 @@ def test_insert_span_redacts_planted_secrets_before_persisting(cleanup_run):
         cleanup_run(run_id)
 
 
+def test_insert_span_redacts_secrets_in_metadata_and_error(cleanup_run):
+    run_id = store.insert_run(trigger=RunTrigger.CHAT_TURN, conversation_id=None, user_id=None)
+    span_id = uuid.uuid4()
+    started = datetime.now(timezone.utc)
+    try:
+        store.insert_span(
+            run_id=run_id, span_id=span_id, parent_span_id=None, sequence=0,
+            kind=SpanKind.TOOL, name="test_tool", status=SpanStatus.ERROR,
+            started_at=started, ended_at=started + timedelta(milliseconds=5), duration_ms=5,
+            input=None, output=None,
+            model=None, input_tokens=None, output_tokens=None,
+            cache_read_tokens=None, cache_write_tokens=None, cost_usd=None,
+            error="AuthError: invalid key sk-VERYSECRETVALUE1234567890",
+            metadata={"api_key": "sk-ANOTHERSECRETVALUE1234567890", "note": "ok"},
+        )
+        Session = get_sessionmaker()
+        with Session() as session:
+            span = session.get(Span, span_id)
+            assert span is not None
+            assert "sk-VERYSECRETVALUE1234567890" not in span.error
+            assert "[REDACTED]" in span.error
+            assert span.metadata_["api_key"] == "[REDACTED]"
+            assert span.metadata_["note"] == "ok"
+    finally:
+        cleanup_run(run_id)
+
+
 def test_finalize_run_sums_span_costs_and_tokens_and_counts_calls_by_kind(cleanup_run):
     run_id = store.insert_run(trigger=RunTrigger.CHAT_TURN, conversation_id=None, user_id=None)
     started = datetime.now(timezone.utc)
