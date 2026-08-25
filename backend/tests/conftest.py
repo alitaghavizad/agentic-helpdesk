@@ -48,6 +48,28 @@ def drop_chroma_collection():
 
 
 @pytest.fixture()
+def cleanup_run():
+    """Test-hygiene-only helper: app.tracing.store opens its own committed
+    sessions for every write (by design -- a trace must survive even if
+    the caller's own business transaction rolls back), so tracing test
+    data is NOT cleaned up by db_session's rollback the way ordinary test
+    data is. Call the returned function with a run_id in a `finally` block
+    to delete that run's spans then the run row itself, mirroring exactly
+    how drop_chroma_collection cleans up test collections above."""
+    from app.db.models import Run, Span
+    from app.db.session import get_sessionmaker
+
+    def _cleanup(run_id) -> None:
+        Session = get_sessionmaker()
+        with Session() as session:
+            session.query(Span).filter(Span.run_id == run_id).delete()
+            session.query(Run).filter(Run.id == run_id).delete()
+            session.commit()
+
+    return _cleanup
+
+
+@pytest.fixture()
 def db_session():
     engine = get_engine()
     connection = engine.connect()

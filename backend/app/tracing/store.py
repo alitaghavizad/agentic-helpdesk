@@ -1,0 +1,146 @@
+from __future__ import annotations
+
+import uuid
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from decimal import Decimal
+
+from app.db.models import Run, RunStatus, RunTrigger, Span, SpanKind, SpanStatus
+from app.db.session import get_sessionmaker
+from app.tracing.redaction import redact
+
+
+def insert_run(
+    *, trigger: RunTrigger, conversation_id: uuid.UUID | None, user_id: uuid.UUID | None
+) -> uuid.UUID:
+    Session = get_sessionmaker()
+    with Session() as session:
+        run = Run(trigger=trigger, status=RunStatus.RUNNING, conversation_id=conversation_id, user_id=user_id)
+        session.add(run)
+        session.commit()
+        return run.id
+
+
+def insert_span(
+    *,
+    run_id: uuid.UUID,
+    span_id: uuid.UUID,
+    parent_span_id: uuid.UUID | None,
+    sequence: int,
+    kind: SpanKind,
+    name: str,
+    status: SpanStatus,
+    started_at: datetime,
+    ended_at: datetime,
+    duration_ms: int,
+    input: dict | None,
+    output: dict | None,
+    model: str | None,
+    input_tokens: int | None,
+    output_tokens: int | None,
+    cache_read_tokens: int | None,
+    cache_write_tokens: int | None,
+    cost_usd: Decimal | None,
+    error: str | None,
+    metadata: dict,
+) -> None:
+    """Inserts exactly one completed Span row. SpanStatus has no
+    in-progress value, so a span is written once, at completion -- never
+    updated afterward. `input`/`output` are redacted here, automatically,
+    so no call site can forget to."""
+    Session = get_sessionmaker()
+    with Session() as session:
+        span = Span(
+            id=span_id,
+            run_id=run_id,
+            parent_span_id=parent_span_id,
+            sequence=sequence,
+            kind=kind,
+            name=name,
+            status=status,
+            started_at=started_at,
+            ended_at=ended_at,
+            duration_ms=duration_ms,
+            input=redact(input) if input is not None else None,
+            output=redact(output) if output is not None else None,
+            model=model,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cache_read_tokens=cache_read_tokens,
+            cache_write_tokens=cache_write_tokens,
+            cost_usd=cost_usd,
+            error=error,
+            metadata_=metadata,
+        )
+        session.add(span)
+        session.commit()
+
+
+def finalize_run(*, run_id: uuid.UUID, status: RunStatus, error: str | None) -> None:
+    """Updates the Run row with rollups computed from its own persisted
+    spans. Unpriced spans (cost_usd is None) contribute nothing to the
+    sum rather than making the whole run's cost None -- only if every
+    single span is unpriced does the run's cost stay None."""
+    Session = get_sessionmaker()
+    with Session() as session:
+        run = session.get(Run, run_id)
+        if run is None:
+            raise ValueError(f"No run with id {run_id}")
+        spans = session.query(Span).filter(Span.run_id == run_id).all()
+
+        ended_at = datetime.now(timezone.utc)
+        run.status = status
+        run.error = error
+        run.ended_at = ended_at
+        run.duration_ms = int((ended_at - run.started_at).total_seconds() * 1000)
+        run.input_tokens = sum(s.input_tokens or 0 for s in spans)
+        run.output_tokens = sum(s.output_tokens or 0 for s in spans)
+        run.cache_read_tokens = sum(s.cache_read_tokens or 0 for s in spans)
+        run.cache_write_tokens = sum(s.cache_write_tokens or 0 for s in spans)
+        priced = [s.cost_usd for s in spans if s.cost_usd is not None]
+        run.cost_usd = sum(priced) if priced else None
+        run.llm_calls = sum(1 for s in spans if s.kind == SpanKind.LLM)
+        run.tool_calls = sum(1 for s in spans if s.kind == SpanKind.TOOL)
+        session.commit()
+
+
+@dataclass
+class SpanNode:
+    span: Span
+    children: list["SpanNode"]
+
+
+@dataclass
+class RunTrace:
+    run: Run
+    roots: list[SpanNode]
+
+
+def trace_tree(run_id: uuid.UUID) -> RunTrace:
+    """Reconstructs the full span tree for a run, ordered by `sequence`.
+    No cost rollup happens here -- each node shows only its own cost_usd;
+    Run.cost_usd (computed once, in finalize_run) is the flat sum."""
+    Session = get_sessionmaker()
+    with Session() as session:
+        run = session.get(Run, run_id)
+        if run is None:
+            raise ValueError(f"No run with id {run_id}")
+        spans = (
+            session.query(Span)
+            .filter(Span.run_id == run_id)
+            .order_by(Span.sequence)
+            .all()
+        )
+        session.expunge(run)
+        for s in spans:
+            session.expunge(s)
+
+    nodes: dict[uuid.UUID, SpanNode] = {s.id: SpanNode(span=s, children=[]) for s in spans}
+    roots: list[SpanNode] = []
+    for s in spans:
+        node = nodes[s.id]
+        if s.parent_span_id is not None and s.parent_span_id in nodes:
+            nodes[s.parent_span_id].children.append(node)
+        else:
+            roots.append(node)
+    return RunTrace(run=run, roots=roots)
