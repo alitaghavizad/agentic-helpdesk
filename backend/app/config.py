@@ -36,6 +36,8 @@ class Settings(BaseSettings):
     max_cost_per_conversation_usd: float = 0.50
     max_tool_iterations: int = 12
 
+    model_pricing_overrides: str = ""
+
     agent_enabled: bool = True
     backend_host: str = "127.0.0.1"
     backend_port: int = 8080
