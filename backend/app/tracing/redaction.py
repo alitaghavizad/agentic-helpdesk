@@ -8,7 +8,15 @@ REDACTED = "[REDACTED]"
 # Field names that are redacted wholesale, regardless of their value's
 # shape -- a password/secret/token/api-key is never safe to persist even
 # partially, so there's no attempt to redact "just the sensitive part".
-_SECRET_KEY_NAME_RE = re.compile(r"pass(word)?|secret|token|api[_-]?key", re.IGNORECASE)
+# Word boundaries prevent false positives on substrings like "token" in
+# "input_tokens" (API usage telemetry) or "pass" in "passed" (verb form).
+_SECRET_KEY_NAME_RE = re.compile(
+    r"(?<![a-z])pass(word)?(?![a-z])"
+    r"|(?<![a-z])secret(?![a-z])"
+    r"|(?<![a-z])token(?![a-z])"
+    r"|(?<![a-z])api[_-]?key(?![a-z])",
+    re.IGNORECASE,
+)
 
 # API-key-shaped strings appearing inside otherwise-ordinary free text
 # (span input/output is often a blob of tool arguments or LLM output, not

@@ -50,3 +50,37 @@ def test_redact_recurses_into_lists_and_nested_dicts():
 def test_redact_leaves_short_numbers_and_non_string_values_alone():
     original = {"k": 5, "score": 0.87, "ok": True, "port": 8080}
     assert redact(original) == original
+
+
+def test_redact_does_not_match_token_substrings_in_telemetry_field_names():
+    """Ensure 'token' substring matches don't redact API usage telemetry fields."""
+    original = {
+        "input_tokens": 42,
+        "output_tokens": 100,
+        "cache_read_tokens": 5,
+        "cache_write_tokens": 10,
+    }
+    # All token-count fields should pass through unchanged
+    assert redact(original) == original
+
+
+def test_redact_does_not_match_pass_substring_in_passed_field():
+    """Ensure 'pass' substring doesn't redact the 'passed' verb field."""
+    original = {"passed": True, "eval_gate": "retrieval"}
+    # Both fields should pass through unchanged
+    assert redact(original) == original
+
+
+def test_redact_still_catches_compound_secret_field_names():
+    """Ensure compound names like db_password and auth_token are still redacted."""
+    original = {
+        "db_password": "super_secret_db_pw",
+        "auth_token": "Bearer xyz123",
+        "user_secret": "shh",
+    }
+    expected = {
+        "db_password": REDACTED,
+        "auth_token": REDACTED,
+        "user_secret": REDACTED,
+    }
+    assert redact(original) == expected
