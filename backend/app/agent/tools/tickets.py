@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.db.models import Ticket, TicketStatus
 from app.rbac.policy import Principal
+from app.tickets.scoping import can_read_ticket, scope_tickets_query
 from app.tickets.service import create_ticket, record_task
 
 
@@ -75,17 +76,10 @@ async def create_ticket_handler(
     }
 
 
-def _row_scope_filter(query, principal: Principal, guest_email: str | None):
-    if principal.kind == "user":
-        return query.filter(Ticket.requester_user_id == uuid.UUID(principal.user_id))
-    return query.filter(Ticket.requester_guest_email == guest_email)
-
-
 async def list_my_tickets_handler(
     principal: Principal, db: Session, args: ListMyTicketsArgs, *, guest_email: str | None = None,
 ) -> dict:
-    query = db.query(Ticket)
-    query = _row_scope_filter(query, principal, guest_email)
+    query = scope_tickets_query(db.query(Ticket), principal, guest_email=guest_email)
     if args.status is not None:
         query = query.filter(Ticket.status == TicketStatus(args.status))
     tickets = query.order_by(Ticket.created_at.desc()).all()
@@ -103,13 +97,7 @@ async def get_ticket_handler(
     ticket = db.get(Ticket, uuid.UUID(args.ticket_id))
     if ticket is None:
         return {"is_error": True, "content": "no such ticket"}
-    owns_it = (
-        (principal.kind == "user" and ticket.requester_user_id == uuid.UUID(principal.user_id))
-        or (principal.kind == "guest" and ticket.requester_guest_email == guest_email)
-        or principal.role == "admin"
-        or (principal.role == "helpdesk" and ticket.assignee_helpdesk_ref == principal.helpdesk_ref)
-    )
-    if not owns_it:
+    if not can_read_ticket(principal, ticket, guest_email=guest_email):
         return {"is_error": True, "content": "you do not have access to this ticket"}
     return {
         "ticket_number": f"TCK-{ticket.ticket_number:06d}", "title": ticket.title, "body": ticket.body,

@@ -92,3 +92,21 @@ async def test_get_ticket_handler_denies_access_to_other_guests_ticket(db_sessio
         _guest_principal("stranger@example.com"), db_session, GetTicketArgs(ticket_id=str(ticket_row.id)), guest_email="stranger@example.com",
     )
     assert result.get("is_error") is True
+
+
+async def test_list_my_tickets_returns_tickets_assigned_to_a_helpdesk_principal(db_session, make_ticket):
+    """Spec 6.4 scopes list_my_tickets by ASSIGNEE for helpdesk. Before the
+    shared scoping chokepoint this filtered on requester identity for every
+    role, so a helpdesk user saw an empty list for tickets assigned to them."""
+    import uuid as _uuid
+
+    from app.agent.tools.tickets import ListMyTicketsArgs, list_my_tickets_handler
+    from app.rbac.policy import Principal
+
+    assigned = make_ticket(assignee_helpdesk_ref="HD-901", requester_user_id=None, requester_guest_email="someone@example.com")
+    helpdesk = Principal(kind="user", user_id=str(_uuid.uuid4()), role="helpdesk", clearance=None, department=None, employee_ref=None, helpdesk_ref="HD-901")
+
+    result = await list_my_tickets_handler(helpdesk, db_session, ListMyTicketsArgs())
+
+    numbers = {t["ticket_number"] for t in result["tickets"]}
+    assert f"TCK-{assigned.ticket_number:06d}" in numbers
