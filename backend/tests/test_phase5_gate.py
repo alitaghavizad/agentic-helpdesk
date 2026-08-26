@@ -7,14 +7,45 @@ import pytest
 from app.db.models import ResolutionPath, RunStatus, RunTrigger, Task, Ticket
 from app.tickets.routing import rank_specialists
 
-# (category, problem summary, substrings any one of which the winning
-# specialization may contain). Drawn from the dataset's own 25 helpdesk
-# specializations -- these are deliberately distinct and single-holder
-# (spec 8.4), which is what makes an exact top-1 expectation reasonable.
+# (category, problem summary, exact set of specialization names a *correct*
+# router could legitimately return for that category). These sets were
+# built by reading all 25 real specializations in
+# corporate_rag_dataset/helpdesk/*.md and deciding, independently of any
+# test run, which ones genuinely own that category's responsibility --
+# not by pinning to whatever a given run happened to produce. Matching is
+# exact-set membership (case-insensitive) rather than substring, per
+# fix-round-1 review: substrings like "network" or "access" each hit
+# multiple unrelated specializations among the 25 (see full list below),
+# so they could let a real routing regression slip through silently.
+#
+# Full 25 for reference (HD-001..HD-025): Identity and Access Management,
+# Windows endpoint support, macOS support, Linux developer workstations,
+# VPN and network access, Microsoft 365 and collaboration, Jira and
+# Confluence, GitHub Enterprise, Cloud and Kubernetes access, Database
+# access, SAP and Finance systems, Salesforce and CRM, HR systems, Security
+# incidents, Endpoint encryption, Hardware and peripherals, Office
+# networking, SSO and MFA, Developer tooling, Monitoring and observability,
+# ServiceNow workflows, Email and calendar, Mobile device management,
+# Privileged access escalation, General L1 triage.
 _ROUTING_CASES = [
-    ("vpn_network", "I cannot connect to the corporate VPN from home; the client times out.", ("vpn", "network")),
-    ("authentication_mfa", "My MFA token stopped working after I replaced my phone.", ("mfa", "authentication", "identity", "access")),
-    ("database_access", "I need read access to the analytics reporting database.", ("database", "data")),
+    # Only "VPN and network access" owns remote VPN connectivity. "Office
+    # networking" is a distinct specialization (in-office LAN/WiFi/printers,
+    # not a home VPN client) and must NOT be accepted even though it also
+    # contains the word "network".
+    ("vpn_network", "I cannot connect to the corporate VPN from home; the client times out.", {"vpn and network access"}),
+    # "SSO and MFA" is the direct owner. "Identity and Access Management"
+    # is also a legitimate answer -- IAM's remit plausibly covers
+    # authentication/identity issues including MFA re-enrollment, and
+    # HD-001's own file describes routing "when the dominant issue concerns
+    # identity and access management". Deliberately excluded: "Mobile
+    # device management" (the query mentions a replaced phone, but device
+    # management is not authentication) and "Privileged access escalation"
+    # (privilege elevation, not MFA) -- both were accidentally admitted by
+    # the old "access" substring.
+    ("authentication_mfa", "My MFA token stopped working after I replaced my phone.", {"sso and mfa", "identity and access management"}),
+    # Only "Database access" owns this category; no other specialization
+    # among the 25 concerns databases.
+    ("database_access", "I need read access to the analytics reporting database.", {"database access"}),
 ]
 
 
@@ -35,9 +66,9 @@ def _traced_run(cleanup_run):
         cleanup_run(handle.run_id)
 
 
-@pytest.mark.parametrize("category,summary,expected_substrings", _ROUTING_CASES)
+@pytest.mark.parametrize("category,summary,expected_specializations", _ROUTING_CASES)
 async def test_routing_picks_a_specialist_whose_specialization_matches_the_category(
-    db_session, category, summary, expected_substrings,
+    db_session, category, summary, expected_specializations,
 ):
     """The 'assigned to a specialist whose specialization matches the
     category' half of the spec-18 phase-5 gate, measured against the real
@@ -46,10 +77,10 @@ async def test_routing_picks_a_specialist_whose_specialization_matches_the_categ
 
     assert candidates, f"no candidate returned for {category!r}"
     top = candidates[0]
-    specialization = (top["specialization"] or "").lower()
-    assert any(s in specialization for s in expected_substrings), (
+    specialization = (top["specialization"] or "").strip().lower()
+    assert specialization in expected_specializations, (
         f"top candidate for {category!r} was {top['helpdesk_ref']} "
-        f"({top['specialization']!r}), which matches none of {expected_substrings}"
+        f"({top['specialization']!r}), which is not one of {sorted(expected_specializations)}"
     )
 
 
