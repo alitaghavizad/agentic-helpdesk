@@ -136,6 +136,31 @@ async def test_dispatch_tool_writes_an_audit_row_when_authorize_denies(db_sessio
     assert "guests cannot use" in row.payload["reason"]
 
 
+async def test_dispatch_tool_still_returns_the_denial_when_the_audit_write_fails(db_session, monkeypatch, capsys):
+    """Spec 6.3: "The loop continues -- a denial is information for the
+    agent, not a crash", and dispatch_tool's own docstring promises it never
+    raises. So a failed audit_log write (connectivity blip, constraint
+    violation, a session left broken by earlier use) must degrade to a
+    warning, not propagate out through loop.py's `except BaseException`,
+    which would end the run as RunStatus.ERROR and kill the whole turn with
+    a generic "internal error occurred"."""
+    def _boom(*args, **kwargs):
+        raise RuntimeError("audit table is on fire")
+
+    monkeypatch.setattr("app.agent.registry.record_audit", _boom)
+
+    result = await dispatch_tool(
+        _GUEST, db=db_session, tool_name="search_knowledge", tool_use_id="t1",
+        raw_input='{"query": "x"}', extra_context={},
+    )
+    # The denial itself is what has to survive -- unchanged, and not
+    # replaced by an "audit failed" error result.
+    assert result["is_error"] is True
+    assert "guests cannot use" in result["content"]
+    # ...but the swallowed failure must not be silent.
+    assert "audit table is on fire" in capsys.readouterr().err
+
+
 async def test_dispatch_tool_returns_error_for_invalid_json_arguments(db_session):
     result = await dispatch_tool(_EMPLOYEE, db=db_session, tool_name="get_my_profile", tool_use_id="t1", raw_input="not json", extra_context={})
     assert result["is_error"] is True

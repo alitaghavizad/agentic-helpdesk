@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import sys
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
@@ -24,7 +25,7 @@ from app.agent.tools.tickets import (
     create_ticket_handler, get_ticket_handler, list_my_tickets_handler, record_task_handler,
 )
 from app.audit.service import actor_from_principal, record_audit
-from app.db.models import ActorType, SpanKind
+from app.db.models import SpanKind
 from app.rbac.policy import Deny, Principal, authorize
 from app.tracing import span
 
@@ -161,12 +162,33 @@ async def dispatch_tool(
         # short-circuits before any handler runs, so nothing else in this
         # turn will commit on our behalf, and there is no partial handler
         # state that this commit could prematurely persist.
-        actor_type, actor_id = actor_from_principal(principal)
-        record_audit(
-            db, actor_type=actor_type, actor_id=actor_id, action="tool.denied",
-            target_type="tool", target_id=tool_name, payload={"reason": decision.reason},
-        )
-        db.commit()
+        #
+        # Guarded, because spec 6.3 makes the denial itself the thing that
+        # must survive: "The loop continues -- a denial is information for
+        # the agent, not a crash", and this function's contract is that it
+        # never raises. An unguarded failure here would propagate up through
+        # loop.py's `except BaseException`, ending the run as
+        # RunStatus.ERROR and killing the whole turn with a generic
+        # "internal error occurred". Note the semantics are the inverse of
+        # the handler path below, where the failure *becomes* the error
+        # result: here a failed audit write must not disturb the denial we
+        # return, so it degrades to a stderr warning (the same way
+        # tracing/spans.py and tracing/pricing.py surface a swallowed
+        # failure) rather than being silently dropped.
+        try:
+            actor_type, actor_id = actor_from_principal(principal)
+            record_audit(
+                db, actor_type=actor_type, actor_id=actor_id, action="tool.denied",
+                target_type="tool", target_id=tool_name, payload={"reason": decision.reason},
+            )
+            db.commit()
+        except Exception as exc:
+            db.rollback()
+            print(
+                f"WARNING: failed to record the tool.denied audit row for "
+                f"{tool_name!r}: {type(exc).__name__}: {exc}",
+                file=sys.stderr,
+            )
         return {"is_error": True, "content": decision.reason}
 
     # Keyword-only params only: handlers' positional parameters are always
