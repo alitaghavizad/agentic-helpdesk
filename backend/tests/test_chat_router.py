@@ -31,20 +31,29 @@ def _cleanup_sse_test_orphans_after_module():
     hard-committed User/Conversation/Run/Span rows persist), so a final
     sweep here can safely delete this module's orphaned User/Conversation
     rows and anything hanging off them (Run, Span). This mirrors
-    test_agent_loop.py's `_sweep_fixed_employee_row_after_module` exactly.
-    Without this sweep, each run of this suite leaves one more User row
-    behind in the shared test Postgres instance, which is exactly what
-    broke tests/test_seed.py's exact-count assertions (`assert total ==
-    126`) after a few manual re-runs of this file while developing it.
+    test_agent_loop.py's `_sweep_fixed_employee_row_after_module` exactly
+    -- including its UsageCounter cleanup: run_turn() -> check_and_record_
+    usage() commits a permanent UsageCounter(user_key, hour-bucket) row
+    through its own independently-committing session, keyed to
+    `principal.user_id` (see send_message_endpoint's `user_key =
+    principal.user_id if principal.kind == "user" else ...` in
+    app/chat/router.py) -- i.e. str(user.id) for this test's hard-
+    committed user. Without this, each run of this suite leaves one more
+    User row *and* one more UsageCounter row behind in the shared test
+    Postgres instance; the User leak is exactly what broke
+    tests/test_seed.py's exact-count assertions (`assert total == 126`)
+    after a few manual re-runs of this file while developing it.
     """
     yield
-    from app.db.models import Run, Span
+    from app.db.models import Run, Span, UsageCounter
     from app.db.session import get_sessionmaker
 
     Session = get_sessionmaker()
     with Session() as session:
         conv_ids = list(_sse_orphan_ids["conversation_ids"])
         user_ids = list(_sse_orphan_ids["user_ids"])
+        if user_ids:
+            session.query(UsageCounter).filter(UsageCounter.user_key.in_([str(uid) for uid in user_ids])).delete(synchronize_session=False)
         if conv_ids:
             run_ids = [row[0] for row in session.query(Run.id).filter(Run.conversation_id.in_(conv_ids))]
             if run_ids:
@@ -97,6 +106,12 @@ def _make_hard_committed_user_and_login(client) -> tuple[dict, User]:
     _cleanup_sse_test_orphans_after_module (top of this file) once every
     test in this module has finished, rather than cleaned up inline (see
     that test's docstring for why it can't be inline).
+
+    The id is recorded into _sse_orphan_ids immediately after this
+    function's own commit succeeds -- not by the caller after both this
+    and _hard_committed_conversation return -- so that a failure partway
+    through (e.g. the login POST below) can never leak a hard-committed
+    User row the module-teardown sweep doesn't know about.
     """
     from app.auth.security import hash_password
     from app.db.session import get_sessionmaker
@@ -111,6 +126,7 @@ def _make_hard_committed_user_and_login(client) -> tuple[dict, User]:
         session.add(user)
         session.commit()
         session.refresh(user)
+    _sse_orphan_ids["user_ids"].append(user.id)
 
     resp = client.post("/api/auth/login", json={"username": user.username, "password": "Passw0rd!dev"})
     token = resp.json()["access_token"]
@@ -128,6 +144,10 @@ def _hard_committed_conversation(user_id: uuid.UUID) -> Conversation:
     hard-committed User, as returned by _make_hard_committed_user_and_login
     above), or this insert's own FK check on conversations_user_id_fkey
     would fail for the identical reason.
+
+    Like _make_hard_committed_user_and_login, this records the new
+    Conversation's id into _sse_orphan_ids itself, immediately after its
+    own commit, so a partial failure never leaves an untracked orphan.
     """
     from app.db.session import get_sessionmaker
 
@@ -137,7 +157,8 @@ def _hard_committed_conversation(user_id: uuid.UUID) -> Conversation:
         session.add(conv)
         session.commit()
         session.refresh(conv)
-        return conv
+    _sse_orphan_ids["conversation_ids"].append(conv.id)
+    return conv
 
 
 def test_create_and_list_conversations(client, db_session):
@@ -151,10 +172,27 @@ def test_create_and_list_conversations(client, db_session):
     assert any(c["id"] == conv_id for c in resp.json())
 
 
-def test_get_conversation_not_found_for_other_users_conversation(client, db_session):
+def test_get_conversation_returns_404_for_nonexistent_conversation(client, db_session):
     headers = _make_user_and_login(client, db_session)
     resp = client.get(f"/api/conversations/{uuid.uuid4()}", headers=headers)
     assert resp.status_code == 404
+
+
+def _guest_login(client) -> dict:
+    resp = client.post("/api/auth/guest", json={"name": "Visitor", "email": "visitor@example.com"})
+    token = resp.json()["access_token"]
+    return {"Authorization": f"Bearer {token}"}
+
+
+def test_guest_can_create_and_read_back_a_conversation(client):
+    headers = _guest_login(client)
+    resp = client.post("/api/conversations", json={"title": "Guest chat"}, headers=headers)
+    assert resp.status_code == 200
+    conv_id = resp.json()["id"]
+
+    resp = client.get(f"/api/conversations/{conv_id}", headers=headers)
+    assert resp.status_code == 200
+    assert resp.json()["id"] == conv_id
 
 
 def test_sse_message_endpoint_streams_events(client, db_session, monkeypatch):
@@ -188,8 +226,6 @@ def test_sse_message_endpoint_streams_events(client, db_session, monkeypatch):
     headers, user = _make_hard_committed_user_and_login(client)
     conv = _hard_committed_conversation(user.id)
     conv_id = str(conv.id)
-    _sse_orphan_ids["user_ids"].append(user.id)
-    _sse_orphan_ids["conversation_ids"].append(conv.id)
 
     fake_client = FakeAnthropicClient([make_text_message(text="Hello! How can I help?")])
     import app.chat.router as router_module

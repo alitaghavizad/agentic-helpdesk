@@ -50,7 +50,7 @@ def _serialize(conv) -> ConversationResponse:
 
 @router.post("", response_model=ConversationResponse)
 def create_conversation_endpoint(payload: CreateConversationRequest, principal: CurrentPrincipal, db: DbSession) -> ConversationResponse:
-    conv = create_conversation(db, principal, title=payload.title)
+    conv = create_conversation(db, principal, title=payload.title, guest_name=principal.guest_name, guest_email=principal.guest_email)
     return _serialize(conv)
 
 

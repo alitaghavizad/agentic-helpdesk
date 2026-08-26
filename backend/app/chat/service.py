@@ -38,6 +38,8 @@ def get_conversation(db: Session, principal: Principal, conversation_id: uuid.UU
         return conv
     if principal.kind == "user" and conv.user_id == uuid.UUID(principal.user_id):
         return conv
+    if principal.kind == "guest" and conv.guest_email is not None and conv.guest_email == principal.guest_email:
+        return conv
     return None
 
 

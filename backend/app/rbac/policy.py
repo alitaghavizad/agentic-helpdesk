@@ -45,6 +45,8 @@ class Principal:
     department: str | None
     employee_ref: str | None
     helpdesk_ref: str | None
+    guest_name: str | None = None
+    guest_email: str | None = None
 
 
 def map_access_classification(raw: str) -> Clearance:
