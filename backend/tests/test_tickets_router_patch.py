@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import uuid
 
+from sqlalchemy import text
+
 from app.db.models import ActorType, AuditLog, EscalationAuthority, Role, TicketStatus, User
 
 
@@ -129,4 +131,67 @@ def test_a_rejected_patch_writes_no_audit_row(client, db_session, make_ticket):
 
     client.patch(f"/api/tickets/{ticket.id}", json={"status": "open"}, headers=headers)
 
+    assert db_session.query(AuditLog).filter(AuditLog.target_id == str(ticket.id)).count() == 0
+
+
+def _read_ticket_row(db_session, ticket_id):
+    """Reads the ticket directly via raw SQL on the same session/transaction,
+    bypassing the ORM identity map.
+
+    `db_session.refresh()` deliberately does not autoflush the object being
+    refreshed, and a bare `execute(text(...))` is not reliably guaranteed to
+    autoflush an unrelated dirty object either -- both would silently hide
+    an uncommitted, un-rolled-back attribute that was staged but never
+    flushed, giving a false pass. An explicit `flush()` first reproduces the
+    actual risk `db.rollback()` guards against: some later operation on this
+    same session (a subsequent query, or another mutation later in a
+    longer-lived session) can trigger a flush at any time, and a dirty
+    attribute nobody rolled back would ride along with it. Flushing here and
+    then reading with raw SQL shows exactly what would be persisted if that
+    happened."""
+    db_session.flush()
+    return db_session.execute(
+        text("SELECT priority, assignee_helpdesk_ref FROM tickets WHERE id = :id"),
+        {"id": str(ticket_id)},
+    ).one()
+
+
+def test_illegal_status_transition_discards_a_staged_priority_change(client, db_session, make_ticket):
+    """The brief's interesting case: priority and status are staged in the
+    same call, but the status half is illegal. The whole request must be
+    rejected atomically -- no partial persistence of the priority change,
+    and no audit row for a mutation that didn't happen."""
+    _user, headers = _login(client, db_session, username="patchpriorityrace", role=Role.HELPDESK, helpdesk_ref="HD-901")
+    ticket = make_ticket(assignee_helpdesk_ref="HD-901", status=TicketStatus.CLOSED)
+
+    resp = client.patch(
+        f"/api/tickets/{ticket.id}", json={"priority": "urgent", "status": "open"}, headers=headers,
+    )
+
+    assert resp.status_code == 409
+    row = _read_ticket_row(db_session, ticket.id)
+    assert row.priority == "medium"
+    assert db_session.query(AuditLog).filter(AuditLog.target_id == str(ticket.id)).count() == 0
+
+
+def test_illegal_status_transition_discards_a_staged_reassignment(client, db_session, make_ticket):
+    """Same property as above, but with a reassignment staged instead of a
+    priority change -- the other mutation that can be staged before the
+    status transition runs."""
+    _user, headers = _login(client, db_session, username="patchreassignrace", role=Role.HELPDESK, helpdesk_ref="HD-901")
+    ticket = make_ticket(assignee_helpdesk_ref="HD-901", status=TicketStatus.CLOSED)
+
+    resp = client.patch(
+        f"/api/tickets/{ticket.id}",
+        json={
+            "assignee_helpdesk_ref": "HD-980",
+            "reassignment_rationale": "Needs high escalation authority.",
+            "status": "open",
+        },
+        headers=headers,
+    )
+
+    assert resp.status_code == 409
+    row = _read_ticket_row(db_session, ticket.id)
+    assert row.assignee_helpdesk_ref == "HD-901"
     assert db_session.query(AuditLog).filter(AuditLog.target_id == str(ticket.id)).count() == 0
