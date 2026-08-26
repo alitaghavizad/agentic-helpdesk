@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
+import json
 
 import pytest
 
@@ -53,13 +54,60 @@ def test_serialized_tool_catalog_contains_no_forbidden_tool_names():
     assert serialized_names.isdisjoint(_FORBIDDEN_TOOL_NAMES)
 
 
+_NON_STRICT_TOOLS = {"record_task", "create_approval_request"}
+
+
 def test_serialized_tool_catalog_is_strict_with_no_additional_properties():
     for param in to_anthropic_tool_params():
         p = param if isinstance(param, dict) else param.model_dump()
         if p.get("type", "custom") not in ("custom", None):
             continue  # server tools (web_search) don't carry input_schema/strict
-        assert p.get("strict") is True
+        # additionalProperties: False at the root holds for every custom
+        # tool regardless of strict -- it's still correct (and still
+        # rejects unexpected top-level keys) even when strict is False.
         assert p["input_schema"].get("additionalProperties") is False
+        if p["name"] in _NON_STRICT_TOOLS:
+            assert p.get("strict") is False
+            continue
+        assert p.get("strict") is True
+
+
+def test_record_task_and_create_approval_request_are_the_only_non_strict_tools():
+    # RecordTaskArgs.evidence and CreateApprovalRequestArgs.action_payload
+    # are plain, intentionally open-ended `dict` fields -- Pydantic renders
+    # those as a nested `additionalProperties: true`, which strict mode's
+    # requirement (every object in the schema, not just the root, must be
+    # closed) can never satisfy. Every other custom tool has no such field
+    # and must stay strict.
+    params = to_anthropic_tool_params()
+    by_name = {p["name"] if isinstance(p, dict) else p.name: (p if isinstance(p, dict) else p.model_dump()) for p in params}
+
+    for name in _NON_STRICT_TOOLS:
+        assert by_name[name].get("strict") is False
+
+    other_custom_tools = {
+        name for name, p in by_name.items()
+        if p.get("type", "custom") in ("custom", None) and name not in _NON_STRICT_TOOLS
+    }
+    # 12 total tools, minus web_search (a server tool dict, not a custom
+    # schema, filtered out above), minus the 2 known non-strict tools.
+    assert len(other_custom_tools) == 9
+    for name in other_custom_tools:
+        assert by_name[name].get("strict") is True
+
+
+def test_to_anthropic_tool_params_serializes_web_search_exactly_once():
+    # web_search is both a real ToolSpec in TOOLS (so TOOLS itself satisfies
+    # the "all 12 tools" catalog) AND explicitly excluded from the
+    # Pydantic-schema loop in to_anthropic_tool_params() in favor of the
+    # real server-tool dict appended separately. If a future edit ever
+    # dropped that exclusion, web_search would silently serialize twice --
+    # once as a broken custom-tool schema, once as the real server tool.
+    params = to_anthropic_tool_params()
+    names = [p["name"] if isinstance(p, dict) else p.name for p in params]
+    assert len(names) == 12
+    assert len(set(names)) == 12
+    assert names.count("web_search") == 1
 
 
 async def test_dispatch_tool_denies_guest_for_search_knowledge():
@@ -88,19 +136,94 @@ async def test_dispatch_tool_filters_extra_context_to_handlers_own_parameters(db
     assert result.get("is_error") is not True
 
 
+async def test_dispatch_tool_actually_passes_extra_context_values_through_to_the_handler(db_session):
+    # The test above only proves get_helpdesk_workload_handler (which
+    # accepts ZERO extra kwargs) doesn't blow up -- it would pass even if
+    # handler_kwargs were hardcoded to {} for every tool. Prove the
+    # opposite here: dispatch create_approval_request (whose handler
+    # requires conversation_id as a keyword-only arg) and confirm the
+    # created row's conversation_id actually matches the value passed
+    # through extra_context, not just that no TypeError was raised.
+    conv = Conversation(guest_name="Guest", guest_email="g@example.com")
+    db_session.add(conv)
+    db_session.commit()
+    db_session.refresh(conv)
+
+    raw_input = json.dumps({
+        "action_type": "send_email", "action_payload": {"to": "hr@northstar.example"},
+        "justification": "Needs a copy of their offer letter.", "risk_level": "low",
+        "agent_summary": "Requesting email send.",
+    })
+    result = await dispatch_tool(
+        _GUEST, db=db_session, tool_name="create_approval_request", tool_use_id="t1",
+        raw_input=raw_input, extra_context={"conversation_id": conv.id},
+    )
+    assert result.get("is_error") is not True
+    assert "request_number" in result
+
+    from app.db.models import ApprovalRequest
+
+    request = db_session.query(ApprovalRequest).filter(
+        ApprovalRequest.request_number == int(result["request_number"].removeprefix("REQ-"))
+    ).one()
+    assert request.conversation_id == conv.id
+
+
 async def test_dispatch_tool_converts_handler_exception_to_is_error(db_session, monkeypatch):
     import app.agent.registry as registry_module
 
     async def _boom(principal, db, args):
         raise RuntimeError("simulated handler failure")
 
-    try:
-        monkeypatch.setattr(registry_module.TOOLS_BY_NAME["get_my_profile"], "handler", _boom)
-    except dataclasses.FrozenInstanceError:
-        monkeypatch.setattr(
-            registry_module, "TOOLS_BY_NAME",
-            {**registry_module.TOOLS_BY_NAME, "get_my_profile": dataclasses.replace(registry_module.TOOLS_BY_NAME["get_my_profile"], handler=_boom)},
-        )
+    # ToolSpec is unconditionally frozen=True, so plain monkeypatch.setattr
+    # on an existing ToolSpec instance always raises FrozenInstanceError --
+    # substituting a handler for a test means swapping the TOOLS_BY_NAME
+    # entry itself for a dataclasses.replace()'d copy instead.
+    monkeypatch.setattr(
+        registry_module, "TOOLS_BY_NAME",
+        {**registry_module.TOOLS_BY_NAME, "get_my_profile": dataclasses.replace(registry_module.TOOLS_BY_NAME["get_my_profile"], handler=_boom)},
+    )
     result = await dispatch_tool(_EMPLOYEE, db=db_session, tool_name="get_my_profile", tool_use_id="t1", raw_input="{}", extra_context={})
     assert result["is_error"] is True
     assert "simulated handler failure" in result["content"]
+
+
+async def test_dispatch_tool_failed_handler_span_records_error_status(db_session, monkeypatch, cleanup_run):
+    # dispatch_tool wraps the WHOLE `async with span(...)` block (not just
+    # the `await spec.handler(...)` call) in its outer try/except, on the
+    # claim that the span's own __aexit__ still observes the exception and
+    # records SpanStatus.ERROR before dispatch_tool catches the re-raised
+    # exception and converts it to an is_error dict. Nothing else tests
+    # this claim -- a future refactor could move the try inside the `async
+    # with` block, which would still pass the test above but silently
+    # record SpanStatus.OK for every failed tool call. Open our own run
+    # (nested inside this file's autouse _traced_run) so we can inspect
+    # its spans via trace_tree after end_run flushes them, instead of
+    # relying on the fixture's own run which gets deleted by cleanup_run
+    # before the test body can look at it.
+    import app.agent.registry as registry_module
+    from app.db.models import RunStatus, RunTrigger
+    from app.tracing import end_run, start_run
+    from app.tracing.store import trace_tree
+
+    async def _boom(principal, db, args):
+        raise RuntimeError("simulated handler failure")
+
+    monkeypatch.setattr(
+        registry_module, "TOOLS_BY_NAME",
+        {**registry_module.TOOLS_BY_NAME, "get_my_profile": dataclasses.replace(registry_module.TOOLS_BY_NAME["get_my_profile"], handler=_boom)},
+    )
+
+    handle = start_run(RunTrigger.CHAT_TURN)
+    try:
+        result = await dispatch_tool(_EMPLOYEE, db=db_session, tool_name="get_my_profile", tool_use_id="t1", raw_input="{}", extra_context={})
+        assert result["is_error"] is True
+        end_run(handle, status=RunStatus.OK)
+
+        trace = trace_tree(handle.run_id)
+        tool_spans = [node.span for node in trace.roots if node.span.name == "get_my_profile"]
+        assert len(tool_spans) == 1
+        assert tool_spans[0].status.value == "error"
+        assert "simulated handler failure" in tool_spans[0].error
+    finally:
+        cleanup_run(handle.run_id)

@@ -24,7 +24,7 @@ from app.agent.tools.tickets import (
     create_ticket_handler, get_ticket_handler, list_my_tickets_handler, record_task_handler,
 )
 from app.db.models import SpanKind
-from app.rbac.policy import Allow, Deny, Principal, authorize
+from app.rbac.policy import Deny, Principal, authorize
 from app.tracing import span
 
 
@@ -77,6 +77,22 @@ TOOLS: list[ToolSpec] = [
 
 TOOLS_BY_NAME: dict[str, ToolSpec] = {t.name: t for t in TOOLS}
 
+# record_task's `evidence` and create_approval_request's `action_payload`
+# are plain `dict` fields, deliberately open-ended (arbitrary diagnostic
+# evidence; a payload shape that varies per action_type). Pydantic renders
+# a bare `dict` field as `{"type": "object", "additionalProperties": true,
+# ...}`, and `_pydantic_schema_to_strict` below only forces
+# `additionalProperties: False` at the ROOT of the schema -- it does not
+# walk into nested object properties, so this `true` survives into the
+# serialized schema. Anthropic's `strict: true` tool-use mode requires
+# `additionalProperties: false` on every object in the schema, including
+# nested ones, so a truly open-ended dict field is structurally
+# incompatible with strict mode -- there is no closed JSON schema that can
+# describe "any object shape". These two tools are therefore served with
+# `strict=False` instead of reworking their (already-reviewed) Pydantic
+# models into JSON-string fields just to satisfy strict mode.
+_NON_STRICT_TOOLS = frozenset({"record_task", "create_approval_request"})
+
 
 def _pydantic_schema_to_strict(model: type[BaseModel]) -> dict:
     schema = model.model_json_schema()
@@ -88,7 +104,8 @@ def to_anthropic_tool_params() -> list[ToolParam | dict]:
     params: list[ToolParam | dict] = [
         ToolParam(
             name=spec.name, description=spec.description,
-            input_schema=_pydantic_schema_to_strict(spec.input_model), strict=True,
+            input_schema=_pydantic_schema_to_strict(spec.input_model),
+            strict=spec.name not in _NON_STRICT_TOOLS,
         )
         for spec in TOOLS
         if spec.name != "web_search"  # serialized as the real server-tool dict below instead
@@ -111,9 +128,16 @@ async def dispatch_tool(
     failure path returns an is_error tool_result dict instead (spec 8.3,
     8.5). `extra_context` carries per-call kwargs some handlers need beyond
     their Pydantic args (conversation_id, run_id, guest_email) -- filtered
-    down to exactly the keyword arguments each specific handler's own
+    down to exactly the keyword-only arguments each specific handler's own
     signature declares, since not every tool's handler accepts the same
-    ones (routing.py's and this file's handlers take none of them at all)."""
+    ones (routing.py's and this file's handlers take none of them at all).
+
+    On the success path, the return value is the handler's raw result
+    dict, not a properly-shaped Anthropic `tool_result` content block (no
+    `type`, no `tool_use_id`, no `is_error` unless the handler set one
+    itself) -- the caller (a future agent loop) is responsible for wrapping
+    this return value into an actual `tool_result` content block using the
+    `tool_use_id` parameter already threaded through this function."""
     if tool_name == "web_search":
         return {"is_error": True, "content": "web_search is a server tool and should never be dispatched here"}
 
@@ -132,7 +156,15 @@ async def dispatch_tool(
     if isinstance(decision, Deny):
         return {"is_error": True, "content": decision.reason}
 
-    accepted_params = set(inspect.signature(spec.handler).parameters)
+    # Keyword-only params only: handlers' positional parameters are always
+    # (principal, db, args) -- including those in the filter set (as a
+    # plain `set(...parameters)` would) risks `got multiple values for
+    # argument` if an extra_context key ever collided with one of those
+    # names, instead of being safely filtered out.
+    accepted_params = {
+        name for name, param in inspect.signature(spec.handler).parameters.items()
+        if param.kind is inspect.Parameter.KEYWORD_ONLY
+    }
     handler_kwargs = {k: v for k, v in extra_context.items() if k in accepted_params}
 
     try:
