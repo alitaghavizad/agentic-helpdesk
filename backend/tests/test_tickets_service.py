@@ -143,3 +143,79 @@ def test_create_ticket_raises_when_task_already_has_a_ticket(db_session):
             priority=TicketPriority.LOW, title="t", body="b", assignment_rationale="r",
             matched_specialization="s", assignment_score=0.5,
         )
+
+
+def test_create_ticket_resolves_assignee_user_id_from_the_helpdesk_ref(db_session):
+    from app.db.models import EscalationAuthority, Role, User
+
+    specialist = User(
+        username="hd-950", email="hd-950@northstar.example", full_name="HD-950", password_hash="x",
+        role=Role.HELPDESK, helpdesk_ref="HD-950", specialization="Network and VPN Support",
+        escalation_authority=EscalationAuthority.STANDARD,
+    )
+    db_session.add(specialist)
+    db_session.commit()
+
+    conv = _make_conversation(db_session)
+    run_id = _make_run(db_session)
+    task = record_task(
+        db_session, conversation_id=conv.id, user_id=None, guest_email=conv.guest_email,
+        title="VPN issue", category=TaskCategory.VPN_NETWORK, severity="medium",
+        summary="s", affected_systems=[], evidence={}, classified_by_run_id=run_id,
+    )
+
+    ticket = create_ticket(
+        db_session, task_id=task.id, conversation_id=conv.id, requester_user_id=None,
+        requester_guest_email=conv.guest_email, assignee_helpdesk_ref="HD-950",
+        priority=TicketPriority.MEDIUM, title="VPN issue", body="Full description",
+        assignment_rationale="Best semantic match.", matched_specialization="Network and VPN Support",
+        assignment_score=0.87,
+    )
+
+    assert ticket.assignee_user_id == specialist.id
+
+
+def test_create_ticket_leaves_assignee_user_id_null_for_an_unknown_ref(db_session):
+    """Spec 8.3 lists create_ticket's validations exhaustively and the
+    assignee ref is deliberately not among them -- the text ref stays the
+    source of truth, the FK is a convenience join populated when resolvable."""
+    conv = _make_conversation(db_session)
+    run_id = _make_run(db_session)
+    task = record_task(
+        db_session, conversation_id=conv.id, user_id=None, guest_email=conv.guest_email,
+        title="VPN issue", category=TaskCategory.VPN_NETWORK, severity="medium",
+        summary="s", affected_systems=[], evidence={}, classified_by_run_id=run_id,
+    )
+
+    ticket = create_ticket(
+        db_session, task_id=task.id, conversation_id=conv.id, requester_user_id=None,
+        requester_guest_email=conv.guest_email, assignee_helpdesk_ref="HD-DOES-NOT-EXIST",
+        priority=TicketPriority.MEDIUM, title="VPN issue", body="Full description",
+        assignment_rationale="r", matched_specialization="s", assignment_score=0.5,
+    )
+
+    assert ticket.assignee_user_id is None
+    assert ticket.assignee_helpdesk_ref == "HD-DOES-NOT-EXIST"
+
+
+def test_create_ticket_flips_the_task_resolution_path_to_ticketed(db_session):
+    from app.db.models import ResolutionPath
+
+    conv = _make_conversation(db_session)
+    run_id = _make_run(db_session)
+    task = record_task(
+        db_session, conversation_id=conv.id, user_id=None, guest_email=conv.guest_email,
+        title="VPN issue", category=TaskCategory.VPN_NETWORK, severity="medium",
+        summary="s", affected_systems=[], evidence={}, classified_by_run_id=run_id,
+    )
+    assert task.resolution_path == ResolutionPath.PENDING
+
+    create_ticket(
+        db_session, task_id=task.id, conversation_id=conv.id, requester_user_id=None,
+        requester_guest_email=conv.guest_email, assignee_helpdesk_ref="HD-950",
+        priority=TicketPriority.MEDIUM, title="VPN issue", body="Full description",
+        assignment_rationale="r", matched_specialization="s", assignment_score=0.5,
+    )
+
+    db_session.refresh(task)
+    assert task.resolution_path == ResolutionPath.TICKETED

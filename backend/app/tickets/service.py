@@ -4,7 +4,7 @@ import uuid
 
 from sqlalchemy.orm import Session
 
-from app.db.models import ResolutionPath, Severity, Task, TaskCategory, Ticket, TicketPriority
+from app.db.models import ResolutionPath, Role, Severity, Task, TaskCategory, Ticket, TicketPriority, User
 
 
 def record_task(
@@ -75,12 +75,22 @@ def create_ticket(
     if existing is not None:
         raise ValueError(f"task {task_id} already has a ticket ({existing.id})")
 
+    # Spec 5.3 carries both an assignee_helpdesk_ref text column and an
+    # assignee_user_id FK. The ref is the source of truth (it is what
+    # routing produced); the FK is a convenience join, populated when it
+    # resolves. An unresolvable ref is NOT an error: spec 8.3 lists this
+    # function's validations exhaustively and the assignee is not among them.
+    assignee = db.query(User).filter(
+        User.role == Role.HELPDESK, User.helpdesk_ref == assignee_helpdesk_ref,
+    ).one_or_none()
+
     ticket = Ticket(
         task_id=task_id,
         conversation_id=conversation_id,
         requester_user_id=requester_user_id,
         requester_guest_email=requester_guest_email,
         assignee_helpdesk_ref=assignee_helpdesk_ref,
+        assignee_user_id=assignee.id if assignee is not None else None,
         matched_specialization=matched_specialization,
         assignment_rationale=assignment_rationale,
         assignment_score=assignment_score,
@@ -89,6 +99,10 @@ def create_ticket(
         body=body,
     )
     db.add(ticket)
+    # The task is no longer merely classified -- it has become a ticket
+    # (spec 5.3's resolution_path enum). Same transaction as the insert:
+    # a task must never read `ticketed` without its ticket existing.
+    task.resolution_path = ResolutionPath.TICKETED
     db.commit()
     db.refresh(ticket)
     return ticket
