@@ -29,8 +29,11 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "--basetemp=.pytest_tmp"
+addopts = "--basetemp=.pytest_tmp -m \"not live_api\""
 asyncio_mode = "auto"
+markers = [
+    "live_api: hits the real Anthropic API and costs real money -- excluded from the default run",
+]
 
 [build-system]
 requires = ["hatchling"]

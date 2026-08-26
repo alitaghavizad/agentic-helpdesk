@@ -11,15 +11,24 @@ from app.rag.backend import get_rag_backend
 from app.rbac.policy import Principal, RetrievalDenied, retrieval_filter
 
 
+_MAX_SEARCH_KNOWLEDGE_K = 10
+_MAX_SEARCH_LESSONS_K = 5
+
+
 class SearchKnowledgeArgs(BaseModel):
     query: str
     scope: str = Field(default="auto")  # "employees" | "helpdesk" | "auto"
-    k: int = Field(default=5, le=10)
+    # No le= bound here: Anthropic's strict tool-use schema validation
+    # rejects "maximum"/"minimum" on integer properties outright ("For
+    # 'integer' type, property 'maximum' is not supported") -- confirmed
+    # against the real API, not a theoretical concern. The spec 8.3 ceiling
+    # (k <= 10) is enforced in the handler below instead.
+    k: int = Field(default=5)
 
 
 class SearchLessonsArgs(BaseModel):
     query: str
-    k: int = Field(default=5, le=5)
+    k: int = Field(default=5)  # spec 8.3 ceiling (k <= 5) enforced in the handler below
 
 
 class GetMyProfileArgs(BaseModel):
@@ -29,13 +38,14 @@ class GetMyProfileArgs(BaseModel):
 async def search_knowledge_handler(principal: Principal, db: Session, args: SearchKnowledgeArgs) -> dict:
     collections = ["employees", "helpdesk"] if args.scope == "auto" else [args.scope]
     backend = get_rag_backend()
+    k = max(1, min(args.k, _MAX_SEARCH_KNOWLEDGE_K))
     wrapped_results: list[str] = []
     for collection in collections:
         try:
             where = retrieval_filter(principal, collection)
         except RetrievalDenied as exc:
             return {"is_error": True, "content": str(exc)}
-        result = await backend.query(collection, args.query, where=where, k=args.k)
+        result = await backend.query(collection, args.query, where=where, k=k)
         for doc, metadata in zip(result["documents"], result["metadatas"]):
             source = f"{collection}/{metadata.get('source_file', 'unknown')}"
             wrapped_results.append(wrap_untrusted(source, doc))
@@ -44,7 +54,8 @@ async def search_knowledge_handler(principal: Principal, db: Session, args: Sear
 
 async def search_lessons_handler(principal: Principal, db: Session, args: SearchLessonsArgs) -> dict:
     backend = get_rag_backend()
-    result = await backend.query("lessons", args.query, where={}, k=args.k)
+    k = max(1, min(args.k, _MAX_SEARCH_LESSONS_K))
+    result = await backend.query("lessons", args.query, where={}, k=k)
     wrapped_results = [
         wrap_untrusted(f"lessons/{metadata.get('lesson_id', 'unknown')}", doc)
         for doc, metadata in zip(result["documents"], result["metadatas"])
