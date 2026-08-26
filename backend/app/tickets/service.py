@@ -4,7 +4,7 @@ import uuid
 
 from sqlalchemy.orm import Session
 
-from app.db.models import ResolutionPath, Task, TaskCategory, Ticket, TicketPriority
+from app.db.models import ResolutionPath, Severity, Task, TaskCategory, Ticket, TicketPriority
 
 
 def record_task(
@@ -15,7 +15,7 @@ def record_task(
     guest_email: str | None,
     title: str,
     category: TaskCategory | str,
-    severity: str,
+    severity: Severity | str,
     summary: str,
     affected_systems: list[str],
     evidence: dict,
@@ -30,7 +30,7 @@ def record_task(
         guest_email=guest_email,
         title=title,
         category=TaskCategory(category) if not isinstance(category, TaskCategory) else category,
-        severity=severity,
+        severity=Severity(severity) if not isinstance(severity, Severity) else severity,
         summary=summary,
         affected_systems=affected_systems,
         evidence=evidence,

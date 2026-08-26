@@ -188,6 +188,47 @@ async def test_dispatch_tool_converts_handler_exception_to_is_error(db_session, 
     assert "simulated handler failure" in result["content"]
 
 
+async def test_dispatch_tool_rolls_back_session_after_a_real_db_flush_failure(db_session):
+    """record_task's severity arg is an unconstrained str (RecordTaskArgs),
+    so a model can send a value Postgres's native enum column rejects --
+    that only fails at db.commit(), not at Pydantic validation. Without an
+    explicit db.rollback() in dispatch_tool's except branch, SQLAlchemy
+    leaves the session "inactive" after the failed flush, and the *next*
+    operation on the same session (e.g. saving the assistant's reply later
+    in the same chat turn) raises PendingRollbackError instead of
+    proceeding -- silently breaking the rest of the turn. Proves the
+    session is still usable immediately after the is_error return."""
+    from app.db.models import Run, RunStatus, RunTrigger
+
+    conv = Conversation(guest_name="Guest", guest_email="g@example.com")
+    db_session.add(conv)
+    # Run created directly via db_session (not tracing.start_run()) so its
+    # id is visible to record_task's FK check within the same transaction --
+    # see the cross-connection FK-visibility gotcha noted throughout this
+    # phase's other test files (db_session's savepoint isn't visible to
+    # tracing's independently-committing session under READ COMMITTED).
+    run = Run(trigger=RunTrigger.CHAT_TURN, status=RunStatus.OK)
+    db_session.add(run)
+    db_session.commit()
+    db_session.refresh(conv)
+    db_session.refresh(run)
+
+    raw_input = json.dumps({
+        "conversation_id": str(conv.id), "title": "Broken VPN", "category": "vpn_network",
+        "severity": "not-a-real-severity", "summary": "s", "affected_systems": [],
+    })
+    result = await dispatch_tool(
+        _GUEST, db=db_session, tool_name="record_task", tool_use_id="t1",
+        raw_input=raw_input, extra_context={"run_id": run.id, "guest_email": conv.guest_email},
+    )
+    assert result["is_error"] is True
+
+    # If dispatch_tool didn't roll back, this next statement on the same
+    # session raises PendingRollbackError instead of succeeding.
+    db_session.add(Conversation(guest_name="Still Works", guest_email="still-works@example.com"))
+    db_session.commit()
+
+
 async def test_dispatch_tool_failed_handler_span_records_error_status(db_session, monkeypatch, cleanup_run):
     # dispatch_tool wraps the WHOLE `async with span(...)` block (not just
     # the `await spec.handler(...)` call) in its outer try/except, on the

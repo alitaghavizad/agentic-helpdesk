@@ -45,6 +45,31 @@ def test_record_task_creates_row_with_pending_resolution_path(db_session):
     assert task.category == TaskCategory.VPN_NETWORK
 
 
+def test_record_task_raises_for_invalid_severity_without_touching_db(db_session):
+    """Guards against a model-supplied severity reaching db.commit() as a raw
+    string: an invalid Postgres enum value fails at flush, not at this
+    boundary, leaving the session unusable for the rest of the turn unless
+    rejected here first (mirrors the existing category coercion)."""
+    conv = _make_conversation(db_session)
+    run_id = _make_run(db_session)
+
+    with pytest.raises(ValueError):
+        record_task(
+            db_session, conversation_id=conv.id, user_id=None, guest_email=conv.guest_email,
+            title="Can't connect to VPN", category=TaskCategory.VPN_NETWORK, severity="not-a-real-severity",
+            summary="s", affected_systems=[], evidence={}, classified_by_run_id=run_id,
+        )
+
+    # Session must still be usable -- proves the raise happened before any
+    # flush/commit reached the DB, not after a poisoned transaction.
+    task = record_task(
+        db_session, conversation_id=conv.id, user_id=None, guest_email=conv.guest_email,
+        title="Can't connect to VPN", category=TaskCategory.VPN_NETWORK, severity="medium",
+        summary="s", affected_systems=[], evidence={}, classified_by_run_id=run_id,
+    )
+    assert task.id is not None
+
+
 def test_create_ticket_succeeds_for_valid_task(db_session):
     conv = _make_conversation(db_session)
     run_id = _make_run(db_session)

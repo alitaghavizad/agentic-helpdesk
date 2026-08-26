@@ -173,5 +173,6 @@ async def dispatch_tool(
             result = await spec.handler(principal, db, args, **handler_kwargs)
             recorder.output = result
     except Exception as exc:
+        db.rollback()
         return {"is_error": True, "content": f"tool execution failed: {exc}"}
     return result
