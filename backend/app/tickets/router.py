@@ -4,14 +4,14 @@ import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.audit.service import actor_from_principal, record_audit
 from app.db.models import Ticket, TicketPriority, TicketStatus
 from app.deps import CurrentPrincipal, DbSession, require_role
 from app.rbac.policy import Principal
 from app.tickets.scoping import can_read_ticket, scope_tickets_query
-from app.tickets.service import InvalidTransition, reassign, transition_status
+from app.tickets.service import InvalidTransition, reassign, resolve_ticket, transition_status
 
 router = APIRouter(prefix="/api/tickets", tags=["tickets"])
 
@@ -145,6 +145,44 @@ def update_ticket(
     )
     # One commit for the mutation and its audit row together -- spec 5.4's
     # append-only log must never describe a change that was rolled back.
+    db.commit()
+    db.refresh(ticket)
+    return serialize_detail(ticket)
+
+
+class ResolveTicketRequest(BaseModel):
+    # min_length=1 catches "", and the service layer rejects whitespace-only
+    # text; both paths matter, since a resolution is what Phase 9's learning
+    # loop later reads.
+    resolution: str = Field(min_length=1)
+
+
+@router.post("/{ticket_id}/resolve", response_model=TicketDetail)
+def resolve_ticket_endpoint(
+    ticket_id: uuid.UUID, payload: ResolveTicketRequest, principal: StaffPrincipal, db: DbSession,
+) -> TicketDetail:
+    ticket = load_readable_ticket(db, principal, ticket_id)
+
+    try:
+        resolve_ticket(
+            db, ticket, resolution=payload.resolution,
+            resolved_by_user_id=uuid.UUID(principal.user_id) if principal.user_id else None,
+        )
+    except InvalidTransition as exc:
+        db.rollback()
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc))
+    except ValueError as exc:
+        # Whitespace-only resolution: semantically a validation failure, so
+        # 422 to match what Pydantic returns for the empty-string case.
+        db.rollback()
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc))
+
+    actor_type, actor_id = actor_from_principal(principal)
+    record_audit(
+        db, actor_type=actor_type, actor_id=actor_id, action="ticket.resolve",
+        target_type="ticket", target_id=str(ticket.id),
+        payload={"resolution": ticket.resolution},
+    )
     db.commit()
     db.refresh(ticket)
     return serialize_detail(ticket)
