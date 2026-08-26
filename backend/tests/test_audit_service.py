@@ -55,9 +55,51 @@ def test_actor_from_principal_maps_user_and_guest():
     assert actor_from_principal(_GUEST) == (ActorType.USER, "g@example.com")
 
 
-def test_audit_module_exposes_no_update_or_delete_path():
-    """Spec 5.4: audit_log is append-only, 'no update or delete path exists
-    in code'. This asserts the module's public surface stays write-only --
-    it fails the moment someone adds a delete_audit/purge/update helper."""
-    public = {name for name, obj in inspect.getmembers(audit_service, inspect.isfunction) if not name.startswith("_") and obj.__module__ == audit_service.__name__}
-    assert public == {"record_audit", "actor_from_principal"}
+_FORBIDDEN_VERBS = ("delete", "remove", "update", "purge", "drop", "destroy", "modify", "edit", "truncate", "erase", "clear")
+
+
+def _names_suspicious_of_mutation(names):
+    return [name for name in names if any(verb in name.lower() for verb in _FORBIDDEN_VERBS)]
+
+
+def test_audit_module_has_no_update_or_delete_path():
+    """Spec 5.4: audit_log is append-only -- 'no update or delete path exists
+    in code'. record_audit() only ever adds+flushes a row; this is a
+    structural guard against a mutation/removal path creeping into this
+    module later.
+
+    It flags any callable name reachable off `app.audit.service` -- a plain
+    module-level function, an underscore-prefixed 'private' helper, a
+    callable object bound to a module attribute, or a name imported from
+    elsewhere and re-exported through this module -- as well as any method
+    (including private ones) on a class that is *defined in* this module,
+    whenever that name contains a mutation/removal verb such as "delete" or
+    "update".
+
+    What this does NOT catch: a delete/update path given an innocuous name
+    with no telltale verb in it (e.g. a function literally called `handle`),
+    or a mutating method reached through a class this module merely
+    *imports* (e.g. `sqlalchemy.orm.Session.delete`) -- scanning arbitrary
+    imported classes would flag library methods this module doesn't call as
+    a delete path and defeat the point of the test. This is a backstop, not
+    a substitute for code review.
+    """
+    offenders = []
+
+    # Every name bound directly on the module -- functions, callables,
+    # classes, anything -- regardless of leading underscore or where it was
+    # originally defined (so a re-exported import is included, unlike a
+    # check keyed on `obj.__module__`).
+    for name, obj in vars(audit_service).items():
+        if callable(obj) and _names_suspicious_of_mutation([name]):
+            offenders.append(f"app.audit.service.{name}")
+
+    # Every method (public or private) on a class actually defined in this
+    # module -- not one merely imported into it.
+    for name, obj in vars(audit_service).items():
+        if inspect.isclass(obj) and obj.__module__ == audit_service.__name__:
+            for meth_name, _meth in inspect.getmembers(obj, callable):
+                if _names_suspicious_of_mutation([meth_name]):
+                    offenders.append(f"{name}.{meth_name}")
+
+    assert not offenders, f"possible update/delete path(s) found: {offenders}"
