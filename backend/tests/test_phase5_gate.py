@@ -33,16 +33,25 @@ _ROUTING_CASES = [
     # not a home VPN client) and must NOT be accepted even though it also
     # contains the word "network".
     ("vpn_network", "I cannot connect to the corporate VPN from home; the client times out.", {"vpn and network access"}),
-    # "SSO and MFA" is the direct owner. "Identity and Access Management"
-    # is also a legitimate answer -- IAM's remit plausibly covers
-    # authentication/identity issues including MFA re-enrollment, and
-    # HD-001's own file describes routing "when the dominant issue concerns
-    # identity and access management". Deliberately excluded: "Mobile
-    # device management" (the query mentions a replaced phone, but device
-    # management is not authentication) and "Privileged access escalation"
-    # (privilege elevation, not MFA) -- both were accidentally admitted by
-    # the old "access" substring.
-    ("authentication_mfa", "My MFA token stopped working after I replaced my phone.", {"sso and mfa", "identity and access management"}),
+    # "SSO and MFA" is the single, dedicated owner of this category. Per
+    # the design spec (2026-08-24-agentic-helpdesk-design.md:359) and
+    # routing.py's own module docstring, the 25 specializations are
+    # deliberately distinct and single-holder -- a purpose-built MFA
+    # specialist exists precisely so a broader catch-all shouldn't need to
+    # be treated as an equally-correct answer. "Identity and Access
+    # Management" is NOT accepted: it is a plausible-sounding but broader
+    # specialization, and admitting it would reintroduce the overbreadth
+    # this fix is about, just at smaller scale. (All 25 profile files share
+    # one boilerplate template, including the "Route tickets to HD-NNN
+    # when the dominant issue concerns <specialization>" routing-guidance
+    # line -- that line is not specific evidence of any specialization's
+    # scope, since it appears verbatim, with only the name substituted, on
+    # every one of the 25 files.) Also excluded: "Mobile device management"
+    # (the query mentions a replaced phone, but device management is not
+    # authentication) and "Privileged access escalation" (privilege
+    # elevation, not MFA) -- both were accidentally admitted by the old
+    # "access" substring.
+    ("authentication_mfa", "My MFA token stopped working after I replaced my phone.", {"sso and mfa"}),
     # Only "Database access" owns this category; no other specialization
     # among the 25 concerns databases.
     ("database_access", "I need read access to the analytics reporting database.", {"database access"}),
