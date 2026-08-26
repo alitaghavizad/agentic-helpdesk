@@ -23,7 +23,8 @@ from app.agent.tools.tickets import (
     CreateTicketArgs, GetTicketArgs, ListMyTicketsArgs, RecordTaskArgs,
     create_ticket_handler, get_ticket_handler, list_my_tickets_handler, record_task_handler,
 )
-from app.db.models import SpanKind
+from app.audit.service import actor_from_principal, record_audit
+from app.db.models import ActorType, SpanKind
 from app.rbac.policy import Deny, Principal, authorize
 from app.tracing import span
 
@@ -154,6 +155,18 @@ async def dispatch_tool(
         decision = authorize(principal, tool_name, args.model_dump())
         recorder.metadata = {"tool_name": tool_name, "decision": type(decision).__name__}
     if isinstance(decision, Deny):
+        # Spec 6.3: a denial produces an is_error tool_result, an audit_log
+        # row, and a denied span -- and the loop continues. record_audit
+        # deliberately does not commit, so commit here: a denial
+        # short-circuits before any handler runs, so nothing else in this
+        # turn will commit on our behalf, and there is no partial handler
+        # state that this commit could prematurely persist.
+        actor_type, actor_id = actor_from_principal(principal)
+        record_audit(
+            db, actor_type=actor_type, actor_id=actor_id, action="tool.denied",
+            target_type="tool", target_id=tool_name, payload={"reason": decision.reason},
+        )
+        db.commit()
         return {"is_error": True, "content": decision.reason}
 
     # Keyword-only params only: handlers' positional parameters are always

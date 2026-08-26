@@ -110,9 +110,30 @@ def test_to_anthropic_tool_params_serializes_web_search_exactly_once():
     assert names.count("web_search") == 1
 
 
-async def test_dispatch_tool_denies_guest_for_search_knowledge():
-    result = await dispatch_tool(_GUEST, db=None, tool_name="search_knowledge", tool_use_id="t1", raw_input='{"query": "x"}', extra_context={})
+async def test_dispatch_tool_denies_guest_for_search_knowledge(db_session):
+    result = await dispatch_tool(_GUEST, db=db_session, tool_name="search_knowledge", tool_use_id="t1", raw_input='{"query": "x"}', extra_context={})
     assert result["is_error"] is True
+
+
+async def test_dispatch_tool_writes_an_audit_row_when_authorize_denies(db_session):
+    """Spec 6.3: a Deny produces an is_error tool_result, an audit_log row,
+    AND a denied span. Phase 4 shipped the first and third; this covers the
+    audit row. dispatch_tool must commit it -- nothing else will, since a
+    denial short-circuits before any handler (and therefore any commit) runs."""
+    from app.db.models import ActorType, AuditLog
+
+    result = await dispatch_tool(
+        _GUEST, db=db_session, tool_name="search_knowledge", tool_use_id="t1",
+        raw_input='{"query": "x"}', extra_context={},
+    )
+    assert result["is_error"] is True
+
+    row = db_session.query(AuditLog).filter(
+        AuditLog.action == "tool.denied", AuditLog.target_id == "search_knowledge",
+    ).one()
+    assert row.actor_type == ActorType.USER
+    assert row.target_type == "tool"
+    assert "guests cannot use" in row.payload["reason"]
 
 
 async def test_dispatch_tool_returns_error_for_invalid_json_arguments(db_session):
