@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import uuid
+from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 
-from app.db.models import Ticket, TicketStatus
-from app.deps import CurrentPrincipal, DbSession
+from app.audit.service import actor_from_principal, record_audit
+from app.db.models import Ticket, TicketPriority, TicketStatus
+from app.deps import CurrentPrincipal, DbSession, require_role
+from app.rbac.policy import Principal
 from app.tickets.scoping import can_read_ticket, scope_tickets_query
+from app.tickets.service import InvalidTransition, reassign, transition_status
 
 router = APIRouter(prefix="/api/tickets", tags=["tickets"])
 
@@ -81,3 +85,66 @@ def list_tickets(
 @router.get("/{ticket_id}", response_model=TicketDetail)
 def get_ticket(ticket_id: uuid.UUID, principal: CurrentPrincipal, db: DbSession) -> TicketDetail:
     return serialize_detail(load_readable_ticket(db, principal, ticket_id))
+
+
+# Spec 14 marks PATCH and resolve as helpdesk/admin. The role gate is the
+# coarse check; load_readable_ticket then applies spec 6.4's row scoping, so
+# a helpdesk user still only reaches tickets assigned to them.
+StaffPrincipal = Annotated[Principal, Depends(require_role("helpdesk", "admin"))]
+
+
+class UpdateTicketRequest(BaseModel):
+    status: TicketStatus | None = None
+    priority: TicketPriority | None = None
+    assignee_helpdesk_ref: str | None = None
+    reassignment_rationale: str | None = None
+
+
+@router.patch("/{ticket_id}", response_model=TicketDetail)
+def update_ticket(
+    ticket_id: uuid.UUID, payload: UpdateTicketRequest, principal: StaffPrincipal, db: DbSession,
+) -> TicketDetail:
+    ticket = load_readable_ticket(db, principal, ticket_id)
+
+    if payload.status is None and payload.priority is None and payload.assignee_helpdesk_ref is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "no fields to update")
+    if payload.assignee_helpdesk_ref is not None and not (payload.reassignment_rationale or "").strip():
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "reassignment_rationale is required when changing the assignee",
+        )
+
+    changes: dict[str, dict[str, str | None]] = {}
+
+    if payload.priority is not None and payload.priority != ticket.priority:
+        changes["priority"] = {"from": ticket.priority.value, "to": payload.priority.value}
+        ticket.priority = payload.priority
+
+    if payload.assignee_helpdesk_ref is not None and payload.assignee_helpdesk_ref != ticket.assignee_helpdesk_ref:
+        changes["assignee_helpdesk_ref"] = {"from": ticket.assignee_helpdesk_ref, "to": payload.assignee_helpdesk_ref}
+        reassign(
+            db, ticket, assignee_helpdesk_ref=payload.assignee_helpdesk_ref,
+            rationale=payload.reassignment_rationale.strip(),
+        )
+
+    if payload.status is not None and payload.status != ticket.status:
+        previous = ticket.status.value
+        try:
+            transition_status(db, ticket, payload.status)
+        except InvalidTransition as exc:
+            # 409: the request is well-formed and authorized, but conflicts
+            # with the ticket's current state.
+            db.rollback()
+            raise HTTPException(status.HTTP_409_CONFLICT, str(exc))
+        changes["status"] = {"from": previous, "to": payload.status.value}
+
+    actor_type, actor_id = actor_from_principal(principal)
+    record_audit(
+        db, actor_type=actor_type, actor_id=actor_id, action="ticket.update",
+        target_type="ticket", target_id=str(ticket.id), payload={"changes": changes},
+    )
+    # One commit for the mutation and its audit row together -- spec 5.4's
+    # append-only log must never describe a change that was rolled back.
+    db.commit()
+    db.refresh(ticket)
+    return serialize_detail(ticket)
