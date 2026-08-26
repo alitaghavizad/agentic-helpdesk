@@ -272,7 +272,7 @@ class Message(Base):
     id: Mapped[uuid.UUID] = _uuid_pk()
     conversation_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("conversations.id"), nullable=False)
     role: Mapped[MessageRole] = mapped_column(SAEnum(MessageRole, name="message_role", values_callable=lambda x: [e.value for e in x]), nullable=False)
-    content: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    content: Mapped[list | dict] = mapped_column(JSONB, nullable=False)
     run_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("runs.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now(), nullable=False)
 
