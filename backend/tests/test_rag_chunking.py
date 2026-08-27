@@ -120,13 +120,19 @@ def test_drop_nondiscriminating_chunks_removes_sections_identical_across_all_doc
     per-document identity prefixes give them just enough variance to spread
     into a dense near-tied band that occupies top-k slots.
 
-    Measured before this change: for "My MFA token stopped working after I
-    replaced my phone", the correct specialist won by a margin of 0.0002 --
-    a coin flip that flipped between suite runs. Dropping these chunks
-    widened it to 0.1616, and fixed Q025 ("Which helpdesk member should
-    receive a ticket primarily about Identity and Access Management?"),
-    which scored recall@5 = 0.00 because every top hit was the identical
-    "Security and privacy behavior" chunk from an unrelated specialist.
+    Measured with clean rebuilds of the corpus with and without these
+    chunks: Recall@5 0.6958 -> 0.7125, MRR 0.7750 -> 0.8108. The routing
+    margin -- how far the correct specialist beats the runner-up -- widened
+    from 0.0620 to 0.2523 for the VPN query and 0.0995 to 0.1616 for the
+    MFA one. Q025 ("Which helpdesk member should receive a ticket primarily
+    about Identity and Access Management?") went from recall@5 = 0.00, with
+    every top hit the identical "Security and privacy behavior" chunk from
+    an unrelated specialist, to returning HD-001 first.
+
+    Most telling: before the change the *winning* chunk for both the VPN and
+    MFA queries was "Ticket documentation standards" -- prose identical
+    across all 25 specialists, so it carried no information about which
+    specialist won. Ranking was decided by noise.
     """
     chunks = [c for f in sorted((DATASET_DIR / "helpdesk").glob("HD-*.md")) for c in chunk_helpdesk_file(f)]
 
