@@ -9,6 +9,43 @@ from app.db.models import ResolutionPath, Task, Ticket
 pytestmark = pytest.mark.live_api
 
 _LIVE_USER_ID = uuid.UUID("00000000-0000-0000-0000-0000000005b1")
+_live_orphans: dict[str, list] = {"user_ids": [], "conversation_ids": []}
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _sweep_live_api_orphans_after_module():
+    """This module's test hard-commits its User and Conversation through
+    its own session (run_turn's tracing and usage-counter writes commit on
+    their own connections and cannot see db_session's savepoint -- the
+    cross-connection FK-visibility gap that bit every Phase 4 task
+    onward), so db_session's rollback never cleans them up. Mirrors
+    tests/test_phase5_gate.py::_sweep_gate_orphans_after_module exactly
+    (added there for this same leak, after it broke tests/test_seed.py's
+    exact `assert total == 126`) -- same table sweep order (UsageCounter,
+    Ticket, Task, Span, Run, Conversation, User), same module-scope-so-it-
+    runs-after-every-test-in-the-module-has-released-its-locks timing."""
+    yield
+
+    from app.db.models import Conversation, Run, Span, Task, Ticket, UsageCounter, User
+    from app.db.session import get_sessionmaker
+
+    Session = get_sessionmaker()
+    with Session() as session:
+        conv_ids = list(_live_orphans["conversation_ids"])
+        user_ids = list(_live_orphans["user_ids"])
+        if user_ids:
+            session.query(UsageCounter).filter(UsageCounter.user_key.in_([str(u) for u in user_ids])).delete(synchronize_session=False)
+        if conv_ids:
+            session.query(Ticket).filter(Ticket.conversation_id.in_(conv_ids)).delete(synchronize_session=False)
+            session.query(Task).filter(Task.conversation_id.in_(conv_ids)).delete(synchronize_session=False)
+            run_ids = [row[0] for row in session.query(Run.id).filter(Run.conversation_id.in_(conv_ids))]
+            if run_ids:
+                session.query(Span).filter(Span.run_id.in_(run_ids)).delete(synchronize_session=False)
+                session.query(Run).filter(Run.id.in_(run_ids)).delete(synchronize_session=False)
+            session.query(Conversation).filter(Conversation.id.in_(conv_ids)).delete(synchronize_session=False)
+        if user_ids:
+            session.query(User).filter(User.id.in_(user_ids)).delete(synchronize_session=False)
+        session.commit()
 
 # The same tightened, exact-set expectation the offline gate uses
 # (tests/test_phase5_gate.py). Deliberately NOT a substring match: "Office
@@ -62,6 +99,9 @@ async def test_a_real_conversation_yields_a_task_and_a_matching_ticket(db_sessio
         setup.add(conv)
         setup.commit()
         conversation_id = conv.id
+
+    _live_orphans["user_ids"].append(_LIVE_USER_ID)
+    _live_orphans["conversation_ids"].append(conversation_id)
 
     principal = Principal(
         kind="user", user_id=str(_LIVE_USER_ID), role="employee", clearance="standard",

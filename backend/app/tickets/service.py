@@ -149,6 +149,17 @@ def transition_status(db: Session, ticket: Ticket, new_status: TicketStatus | st
         raise InvalidTransition(
             f"cannot move ticket from {ticket.status.value!r} to {target.value!r}"
         )
+    # RESOLVED -> IN_PROGRESS ("reopening") is legal precisely because a
+    # resolution that didn't hold is a normal helpdesk outcome, but the
+    # prior resolution/resolved_at/resolved_by_user_id would otherwise sit
+    # stale on a ticket that is once again actively being worked -- and
+    # Phase 9's learning loop reads `resolution` as ground truth. RESOLVED
+    # -> CLOSED deliberately keeps these columns: closing out a resolved
+    # ticket is the resolution's natural endpoint, not a correction.
+    if ticket.status == TicketStatus.RESOLVED and target == TicketStatus.IN_PROGRESS:
+        ticket.resolution = None
+        ticket.resolved_at = None
+        ticket.resolved_by_user_id = None
     ticket.status = target
     return ticket
 

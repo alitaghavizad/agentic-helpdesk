@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
 
 from sqlalchemy import text
 
@@ -174,11 +175,85 @@ def test_illegal_status_transition_discards_a_staged_priority_change(client, db_
     assert db_session.query(AuditLog).filter(AuditLog.target_id == str(ticket.id)).count() == 0
 
 
+def test_patch_cannot_set_status_to_resolved_directly(client, db_session, make_ticket):
+    """M3: resolve_ticket() exists to guarantee a non-empty resolution plus
+    attribution -- Phase 9's learning loop reads the resolution text. PATCH
+    must not be able to reach RESOLVED by a side door: LEGAL_TRANSITIONS
+    permits ASSIGNED/IN_PROGRESS/ESCALATED -> RESOLVED (resolve_ticket()
+    depends on that transition being legal), but transition_status() itself
+    enforces no invariant about resolution data, so PATCH {"status":
+    "resolved"} used to reach db.commit() and produce a RESOLVED ticket
+    with resolution=None, resolved_at=None, resolved_by_user_id=None."""
+    _user, headers = _login(client, db_session, username="patchresolvebypass", role=Role.HELPDESK, helpdesk_ref="HD-901")
+    ticket = make_ticket(assignee_helpdesk_ref="HD-901", status=TicketStatus.IN_PROGRESS)
+
+    resp = client.patch(f"/api/tickets/{ticket.id}", json={"status": "resolved"}, headers=headers)
+
+    assert resp.status_code == 400, resp.text
+    db_session.refresh(ticket)
+    assert ticket.status == TicketStatus.IN_PROGRESS
+    assert ticket.resolution is None
+    assert ticket.resolved_at is None
+    assert ticket.resolved_by_user_id is None
+
+
+def test_reopening_a_resolved_ticket_clears_stale_resolution_fields(client, db_session, make_ticket):
+    """M3 (related): resolved -> in_progress is an explicitly legal
+    transition (a resolution that didn't hold is a normal helpdesk
+    outcome), but leaves the previous resolution/resolved_at/
+    resolved_by_user_id sitting on the row -- looking resolved on a ticket
+    that is once again actively being worked."""
+    user, headers = _login(client, db_session, username="patchreopen", role=Role.HELPDESK, helpdesk_ref="HD-901")
+    ticket = make_ticket(assignee_helpdesk_ref="HD-901", status=TicketStatus.RESOLVED)
+    ticket.resolution = "Reset the VPN client config."
+    ticket.resolved_at = datetime.now(timezone.utc)
+    ticket.resolved_by_user_id = user.id
+    db_session.commit()
+
+    resp = client.patch(f"/api/tickets/{ticket.id}", json={"status": "in_progress"}, headers=headers)
+
+    assert resp.status_code == 200, resp.text
+    db_session.refresh(ticket)
+    assert ticket.status == TicketStatus.IN_PROGRESS
+    assert ticket.resolution is None
+    assert ticket.resolved_at is None
+    assert ticket.resolved_by_user_id is None
+
+
+def test_patch_with_unknown_assignee_ref_is_400(client, db_session, make_ticket):
+    """S2: create_ticket's tolerance for an unresolvable assignee ref is
+    justified by spec 8.3's exhaustive validation list, but a human-facing
+    PATCH silently nulling the FK orphans the ticket -- the original
+    assignee loses access and nobody gains it. PATCH should reject an
+    unresolvable ref outright."""
+    _user, headers = _login(client, db_session, username="patchunknownref", role=Role.ADMIN)
+    ticket = make_ticket(assignee_helpdesk_ref="HD-901")
+
+    resp = client.patch(
+        f"/api/tickets/{ticket.id}",
+        json={"assignee_helpdesk_ref": "HD-DOES-NOT-EXIST", "reassignment_rationale": "Reassigning."},
+        headers=headers,
+    )
+
+    assert resp.status_code == 400, resp.text
+    db_session.refresh(ticket)
+    assert ticket.assignee_helpdesk_ref == "HD-901"
+
+
 def test_illegal_status_transition_discards_a_staged_reassignment(client, db_session, make_ticket):
     """Same property as above, but with a reassignment staged instead of a
     priority change -- the other mutation that can be staged before the
-    status transition runs."""
+    status transition runs. HD-980 must be a real helpdesk user: S2's
+    unresolvable-ref check now runs before the status transition, so an
+    unknown ref would itself produce a 400 and never exercise the race
+    this test is actually about."""
     _user, headers = _login(client, db_session, username="patchreassignrace", role=Role.HELPDESK, helpdesk_ref="HD-901")
+    db_session.add(User(
+        username="hd-980-race", email="hd-980-race@northstar.example", full_name="HD-980", password_hash="x",
+        role=Role.HELPDESK, helpdesk_ref="HD-980", specialization="Identity and Access Management",
+        escalation_authority=EscalationAuthority.HIGH,
+    ))
+    db_session.commit()
     ticket = make_ticket(assignee_helpdesk_ref="HD-901", status=TicketStatus.CLOSED)
 
     resp = client.patch(

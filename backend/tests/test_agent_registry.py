@@ -7,7 +7,7 @@ import uuid
 import pytest
 
 from app.agent.registry import TOOLS, dispatch_tool, to_anthropic_tool_params
-from app.db.models import Conversation
+from app.db.models import Conversation, Severity, TaskCategory, TicketPriority
 from app.rbac.policy import Principal
 
 _GUEST = Principal(kind="guest", user_id=None, role="guest", clearance=None, department=None, employee_ref=None, helpdesk_ref=None)
@@ -109,6 +109,44 @@ def test_to_anthropic_tool_params_serializes_web_search_exactly_once():
     assert len(names) == 12
     assert len(set(names)) == 12
     assert names.count("web_search") == 1
+
+
+def test_find_helpdesk_specialist_and_create_ticket_enums_are_inlined_not_ref():
+    """M2: find_helpdesk_specialist and create_ticket are both strict
+    tools, and strict mode forbids $ref/$defs anywhere in the schema (only
+    record_task and create_approval_request are exempt, via
+    _NON_STRICT_TOOLS, and only because of their open-ended dict fields --
+    see this module's own docstring on that set). Constraining
+    FindHelpdeskSpecialistArgs.category/.severity and
+    CreateTicketArgs.priority with an actual Enum class (the way commit
+    44e4cf1 did for RecordTaskArgs, a _NON_STRICT_TOOLS member) would
+    silently reintroduce $defs/$ref into a *strict* tool's schema --
+    Literal[...] is required instead, since Pydantic renders it as an
+    inline `enum` array. This test would fail against an Enum-typed
+    version of these fields: schema.get('$defs') would be truthy and the
+    category/severity/priority property dicts would carry '$ref' instead
+    of an inline 'enum' list."""
+    params = to_anthropic_tool_params()
+    by_name = {p["name"] if isinstance(p, dict) else p.name: (p if isinstance(p, dict) else p.model_dump()) for p in params}
+
+    find_schema = by_name["find_helpdesk_specialist"]["input_schema"]
+    create_schema = by_name["create_ticket"]["input_schema"]
+
+    assert by_name["find_helpdesk_specialist"].get("strict") is True
+    assert by_name["create_ticket"].get("strict") is True
+
+    assert "$defs" not in find_schema
+    assert "$defs" not in create_schema
+
+    category_prop = find_schema["properties"]["category"]
+    severity_prop = find_schema["properties"]["severity"]
+    priority_prop = create_schema["properties"]["priority"]
+
+    assert "$ref" not in category_prop and "$ref" not in severity_prop and "$ref" not in priority_prop
+
+    assert set(category_prop["enum"]) == {c.value for c in TaskCategory}
+    assert set(severity_prop["enum"]) == {s.value for s in Severity}
+    assert set(priority_prop["enum"]) == {p.value for p in TicketPriority}
 
 
 async def test_dispatch_tool_denies_guest_for_search_knowledge(db_session):

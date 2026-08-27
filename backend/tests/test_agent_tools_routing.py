@@ -96,6 +96,21 @@ async def test_get_helpdesk_workload_counts_open_and_in_progress_tickets(db_sess
     assert result["open_and_in_progress"] == 2
 
 
+def test_find_helpdesk_specialist_args_rejects_a_miscased_severity_and_category():
+    """M2: FindHelpdeskSpecialistArgs.category/.severity used to be
+    unconstrained `str`, so a miscased model output like
+    severity='Critical' category='security_Incident' was accepted, and
+    rank_specialists' `severity in ESCALATING_SEVERITIES` /
+    `category == "security_incident"` checks (both lowercase literals)
+    then silently skipped spec 8.4's escalation hard filter -- a
+    critical/security ticket could route to a standard-authority
+    specialist. Constraining these fields the same way commit 44e4cf1 did
+    for RecordTaskArgs's category/severity closes this at the Pydantic
+    boundary, before rank_specialists ever sees the value."""
+    with pytest.raises(Exception):
+        FindHelpdeskSpecialistArgs(problem_summary="x", category="security_Incident", severity="Critical")
+
+
 async def test_find_helpdesk_specialist_filters_out_standard_authority_for_critical_severity(db_session):
     _make_helpdesk_user(db_session, "HD-901", "Network and VPN Support", EscalationAuthority.STANDARD)
     _make_helpdesk_user(db_session, "HD-902", "Network and VPN Support", EscalationAuthority.HIGH)

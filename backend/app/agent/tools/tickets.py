@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import uuid
+from typing import Literal
 
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app.db.models import TaskCategory, Severity, Ticket, TicketStatus
+from app.db.models import TaskCategory, Severity, Ticket, TicketPriority, TicketStatus
 from app.rbac.policy import Principal
 from app.tickets.scoping import can_read_ticket, scope_tickets_query
 from app.tickets.service import create_ticket, record_task
@@ -23,7 +24,18 @@ class RecordTaskArgs(BaseModel):
 class CreateTicketArgs(BaseModel):
     task_id: str
     assignee_helpdesk_ref: str
-    priority: str
+    # create_ticket is a strict tool (see app/agent/registry.py's
+    # _NON_STRICT_TOOLS docstring), so this is Literal[...] rather than the
+    # TicketPriority enum class -- Pydantic renders Literal as an inline
+    # `enum` array, while an Enum class field would pull in a $ref/$defs
+    # pair that strict mode forbids. Plain `str` used to accept any value,
+    # including severity-shaped ones like "critical" (TicketPriority is
+    # low/medium/high/urgent; Severity is low/medium/high/critical) -- a
+    # model reusing its own severity value for priority passed Pydantic
+    # validation here, then failed only inside create_ticket()'s
+    # `TicketPriority(priority)` coercion, deep enough that the agent would
+    # keep retrying the same bad value until the turn died.
+    priority: Literal[tuple(p.value for p in TicketPriority)]
     title: str
     body: str
     assignment_rationale: str

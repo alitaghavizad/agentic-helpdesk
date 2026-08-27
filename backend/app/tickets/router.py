@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 from app.audit.service import actor_from_principal, record_audit
-from app.db.models import Ticket, TicketPriority, TicketStatus
+from app.db.models import Role, Ticket, TicketPriority, TicketStatus, User
 from app.deps import CurrentPrincipal, DbSession, require_role
 from app.rbac.policy import Principal
 from app.tickets.scoping import can_read_ticket, scope_tickets_query
@@ -108,11 +108,40 @@ def update_ticket(
 
     if payload.status is None and payload.priority is None and payload.assignee_helpdesk_ref is None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "no fields to update")
+    # M3: resolve_ticket() (POST /api/tickets/{id}/resolve) exists
+    # specifically to guarantee a non-empty resolution plus attribution --
+    # the resolution text is what Phase 9's learning loop later reads.
+    # transition_status() alone enforces no such invariant, and
+    # LEGAL_TRANSITIONS legitimately allows ASSIGNED/IN_PROGRESS/ESCALATED
+    # -> RESOLVED (resolve_ticket depends on that transition being legal),
+    # so PATCH must not be allowed to reach RESOLVED by itself -- it would
+    # otherwise produce a RESOLVED ticket with no resolution at all.
+    if payload.status is not None and payload.status == TicketStatus.RESOLVED:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "cannot set status to 'resolved' via PATCH; use POST /api/tickets/{id}/resolve instead",
+        )
     if payload.assignee_helpdesk_ref is not None and not (payload.reassignment_rationale or "").strip():
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
             "reassignment_rationale is required when changing the assignee",
         )
+    # S2: create_ticket()'s tolerance for an unresolvable assignee ref is
+    # justified by spec 8.3's exhaustive validation list for that
+    # model-driven tool call, but this is a human-facing endpoint --
+    # silently nulling assignee_user_id would orphan the ticket (the
+    # original assignee loses access via scope_tickets_query, and nobody
+    # gains it). Reject outright instead of reusing reassign()'s
+    # unresolved-ref tolerance.
+    if payload.assignee_helpdesk_ref is not None:
+        new_assignee = db.query(User).filter(
+            User.role == Role.HELPDESK, User.helpdesk_ref == payload.assignee_helpdesk_ref,
+        ).one_or_none()
+        if new_assignee is None:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                f"no such helpdesk specialist: {payload.assignee_helpdesk_ref!r}",
+            )
 
     changes: dict[str, dict[str, str | None]] = {}
 

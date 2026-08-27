@@ -33,7 +33,7 @@ def collapse_to_unique_helpdesk_ids(query_result) -> list[str]:
 
 def open_workload(db: Session, helpdesk_ref: str) -> int:
     """Spec 8.4's 'live load' signal: open + in-progress tickets for one
-    specialist. Also used by the reassignment endpoint (tickets/router.py)."""
+    specialist."""
     return db.query(Ticket).filter(
         Ticket.assignee_helpdesk_ref == helpdesk_ref,
         Ticket.status.in_(OPEN_STATUSES),

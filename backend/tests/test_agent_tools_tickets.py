@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from app.agent.tools.tickets import (
     CreateTicketArgs,
     GetTicketArgs,
@@ -50,6 +52,25 @@ async def test_record_task_handler_creates_task(db_session):
         conversation_id=conv.id, run_id=run_id, guest_email=conv.guest_email,
     )
     assert "task_id" in result
+
+
+def test_create_ticket_args_rejects_a_severity_style_priority_value():
+    """M2: CreateTicketArgs.priority used to accept any string, but
+    TicketPriority's real values are low/medium/high/urgent while
+    Severity's are low/medium/high/critical -- a model that (plausibly,
+    given it just used 'critical' for a task's severity) says
+    priority='critical' passed Pydantic validation here, then blew up as a
+    ValueError only inside create_ticket()'s
+    `TicketPriority(priority)` coercion, deep enough that the model would
+    retry the same bad value until the turn died. Constraining this field
+    the same way as RecordTaskArgs's category/severity (commit 44e4cf1)
+    catches this at the tool-arg boundary instead."""
+    with pytest.raises(Exception):
+        CreateTicketArgs(
+            task_id="00000000-0000-0000-0000-000000000001", assignee_helpdesk_ref="HD-001",
+            priority="critical", title="t", body="b", assignment_rationale="r",
+            matched_specialization="s", assignment_score=0.5,
+        )
 
 
 async def test_create_ticket_handler_and_list_my_tickets_round_trip(db_session):
