@@ -43,3 +43,13 @@ def test_get_settings_loads_real_env_file_and_is_cached():
     settings_b = get_settings()
     assert settings_a is settings_b
     assert settings_a.anthropic_api_key
+
+
+def test_email_allowlist_defaults_to_empty_meaning_nobody():
+    """Fail closed: an unset EMAIL_RECIPIENT_ALLOWLIST must reject every
+    recipient rather than allow every recipient."""
+    from app.config import Settings
+
+    settings = Settings(_env_file=None)
+    assert settings.email_recipient_allowlist == ""
+    assert settings.smtp_secure is False

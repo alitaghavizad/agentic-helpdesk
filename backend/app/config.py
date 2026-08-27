@@ -26,6 +26,15 @@ class Settings(BaseSettings):
     smtp_user: str = ""
     smtp_password: str = ""
     smtp_from: str = ""
+    # True selects implicit TLS (SMTP_SSL); false selects STARTTLS. Port 465
+    # implies implicit TLS regardless, because no server speaks STARTTLS
+    # there. Spec 9.3 assumes 587/STARTTLS; the configured account is
+    # 465/implicit. Supporting both is amendment 2.4 of the phase 6 design.
+    smtp_secure: bool = False
+    # Comma-separated glob patterns. EMPTY MEANS SEND TO NOBODY -- this fails
+    # closed on purpose, so a missing config value can never widen the blast
+    # radius of an approved send_email action.
+    email_recipient_allowlist: str = ""
 
     jwt_secret: str = ""
 
