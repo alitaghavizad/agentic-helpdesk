@@ -3,12 +3,13 @@ from __future__ import annotations
 import uuid
 
 import pytest
-from sqlalchemy import text
 
 from app.approvals import executor
 from app.db.models import (
-    ApprovalActionType, ApprovalRequest, ApprovalStatus, Conversation, RiskLevel, Role, User,
+    ApprovalActionType, ApprovalRequest, ApprovalStatus, AuditLog, Clearance, Conversation, Message,
+    MessageRole, RiskLevel, Role, User,
 )
+from app.notifications import email as email_module
 
 
 @pytest.fixture()
@@ -36,18 +37,7 @@ def make_approval(db_session, requester):
             status=ApprovalStatus.APPROVED,
         )
         db_session.add(row)
-        # requester_user_id may deliberately name a user that no longer
-        # exists, simulating a hard-deleted account -- the FK on this column
-        # is NOT DEFERRABLE, so Postgres would reject the literal INSERT
-        # before the executor ever ran. The point of a test using such an id
-        # is the executor's OWN re-validation, not Postgres's constraint, so
-        # trigger enforcement (including FK checks) is suspended for this
-        # one flush.
-        db_session.execute(text("SET session_replication_role = replica"))
-        try:
-            db_session.flush()
-        finally:
-            db_session.execute(text("SET session_replication_role = DEFAULT"))
+        db_session.flush()
         return row
     return _make
 
@@ -111,10 +101,21 @@ def test_a_deactivated_requester_fails_execution(db_session, make_approval, requ
     assert outcome.result["reason"] == "requester_not_active"
 
 
-def test_a_missing_requester_fails_execution(db_session, make_approval):
-    approval = make_approval(
-        ApprovalActionType.RESET_CREDENTIAL, {"target_username": "u", "credential_kind": "password"},
-        requester_user_id=uuid.uuid4(),
+def test_a_missing_requester_fails_execution(db_session):
+    """Simulates a requester hard-deleted between filing and approval.
+
+    Deliberately does NOT persist the ApprovalRequest: requester_user_id has
+    a non-deferrable FK, and defeating that constraint (e.g. with
+    session_replication_role) would switch off referential integrity for
+    every other test sharing the fixture. _rebuild_principal only reads the
+    attribute, so an unpersisted instance exercises the identical path with
+    nothing disabled."""
+    approval = ApprovalRequest(
+        conversation_id=uuid.uuid4(), task_id=None, requester_user_id=uuid.uuid4(),
+        action_type=ApprovalActionType.RESET_CREDENTIAL,
+        action_payload={"target_username": "u", "credential_kind": "password"},
+        justification="j", risk_level=RiskLevel.LOW, agent_summary="a",
+        status=ApprovalStatus.APPROVED,
     )
     outcome = executor.execute(db_session, approval)
     assert outcome.ok is False
@@ -130,10 +131,6 @@ def test_a_guest_requester_is_permitted(db_session, make_approval):
     )
     outcome = executor.execute(db_session, approval)
     assert outcome.ok is True
-
-
-from app.db.models import Clearance, Message, MessageRole, NotificationType, Notification
-from app.notifications import email as email_module
 
 
 def test_send_email_handler_delivers_and_records(db_session, make_approval, monkeypatch):
@@ -180,6 +177,28 @@ def test_update_user_clearance_writes_the_column(db_session, make_approval, requ
     db_session.flush()
     assert outcome.ok is True
     assert requester.clearance is Clearance.SENSITIVE
+
+
+def test_update_user_clearance_writes_an_audit_row(db_session, make_approval, requester):
+    """Design spec: update_user_clearance writes users.clearance and is
+    audited. The mutation itself must leave an audit_log row, distinct from
+    decide()'s own audit entry for the approval decision."""
+    approval = make_approval(
+        ApprovalActionType.UPDATE_USER_CLEARANCE,
+        {"target_username": requester.username, "new_clearance": "privileged"},
+    )
+    outcome = executor.execute(db_session, approval)
+    db_session.flush()
+    assert outcome.ok is True
+
+    rows = db_session.query(AuditLog).filter(
+        AuditLog.action == "user.clearance_changed",
+        AuditLog.target_id == str(requester.id),
+    ).all()
+    assert len(rows) == 1
+    assert rows[0].payload["previous_clearance"] is None
+    assert rows[0].payload["new_clearance"] == "privileged"
+    assert rows[0].payload["approval_request_id"] == str(approval.id)
 
 
 def test_update_user_clearance_rejects_an_unknown_clearance(db_session, make_approval, requester):
@@ -244,3 +263,15 @@ def test_cross_department_assignment_on_a_missing_ticket_fails(db_session, make_
     )
     outcome = executor.execute(db_session, approval)
     assert outcome.ok is False
+
+
+def test_cross_department_assignment_on_a_malformed_ticket_id_is_payload_invalid(db_session, make_approval):
+    """A non-UUID ticket_id must be caught by re-validation, the accurate
+    reason, rather than reach the handler and surface as handler_failed."""
+    approval = make_approval(
+        ApprovalActionType.CROSS_DEPARTMENT_TICKET_ASSIGNMENT,
+        {"ticket_id": "not-a-uuid", "assignee_helpdesk_ref": "HD-005", "rationale": "r"},
+    )
+    outcome = executor.execute(db_session, approval)
+    assert outcome.ok is False
+    assert outcome.result["reason"] == "payload_invalid"

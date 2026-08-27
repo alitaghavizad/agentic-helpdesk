@@ -26,8 +26,9 @@ from typing import Callable
 from pydantic import BaseModel, ValidationError
 from sqlalchemy.orm import Session
 
+from app.audit.service import record_audit
 from app.db.models import (
-    ApprovalActionType, ApprovalRequest, Clearance, MessageRole, NotificationType, Role, SpanKind, Ticket, User,
+    ActorType, ApprovalActionType, ApprovalRequest, Clearance, Conversation, MessageRole, SpanKind, Ticket, User,
 )
 from app.rbac.policy import Deny, Principal, authorize
 from app.tracing.spans import span
@@ -70,7 +71,10 @@ class DiscloseRestrictedInformationPayload(BaseModel):
 
 
 class CrossDepartmentTicketAssignmentPayload(BaseModel):
-    ticket_id: str
+    # uuid.UUID, not str: a malformed id must fail re-validation as
+    # `payload_invalid`, the accurate reason, rather than reach the handler
+    # and blow up as `handler_failed`.
+    ticket_id: _uuid.UUID
     assignee_helpdesk_ref: str
     rationale: str
 
@@ -128,12 +132,28 @@ def _handle_send_email(db: Session, approval: ApprovalRequest, payload: SendEmai
 
 
 def _handle_update_user_clearance(db: Session, approval: ApprovalRequest, payload: UpdateUserClearancePayload) -> dict:
+    """Design spec: this action writes users.clearance and is audited. The
+    audit row records the mutation itself, distinct from decide()'s own
+    audit entry for the approval decision."""
     target = db.query(User).filter(User.username == payload.target_username).one_or_none()
     if target is None:
         raise LookupError(f"no user named {payload.target_username!r}")
     previous = target.clearance.value if target.clearance else None
     target.clearance = Clearance(payload.new_clearance)
     db.flush()
+    record_audit(
+        db,
+        actor_type=ActorType.SYSTEM,
+        actor_id=None,
+        action="user.clearance_changed",
+        target_type="user",
+        target_id=str(target.id),
+        payload={
+            "previous_clearance": previous,
+            "new_clearance": target.clearance.value,
+            "approval_request_id": str(approval.id),
+        },
+    )
     return {
         "target_username": target.username,
         "previous_clearance": previous,
@@ -171,7 +191,7 @@ def _handle_cross_department_ticket_assignment(
 ) -> dict:
     from app.tickets.service import reassign
 
-    ticket = db.query(Ticket).filter(Ticket.id == _uuid.UUID(payload.ticket_id)).one_or_none()
+    ticket = db.query(Ticket).filter(Ticket.id == payload.ticket_id).one_or_none()
     if ticket is None:
         raise LookupError(f"no ticket with id {payload.ticket_id}")
 
@@ -208,9 +228,17 @@ def _rebuild_principal(db: Session, approval: ApprovalRequest) -> Principal | Ex
     deactivated between filing and approval must not have the action run on
     their behalf."""
     if approval.requester_user_id is None:
+        # Spec: rebuild the guest principal FROM THE CONVERSATION. Guests are
+        # deliberately not rows in `users` (spec 5.1), so the conversation is
+        # the only place their identity lives.
+        conversation = db.query(Conversation).filter(
+            Conversation.id == approval.conversation_id,
+        ).one_or_none()
         return Principal(
             kind="guest", user_id=None, role="guest", clearance=None,
             department=None, employee_ref=None, helpdesk_ref=None,
+            guest_name=conversation.guest_name if conversation else None,
+            guest_email=conversation.guest_email if conversation else None,
         )
 
     user = db.query(User).filter(User.id == approval.requester_user_id).one_or_none()
@@ -242,10 +270,16 @@ def execute(db: Session, approval: ApprovalRequest) -> ExecutionOutcome:
     try:
         payload = schema.model_validate(approval.action_payload)
     except ValidationError as exc:
-        # str(exc), not exc.errors(): the caller (and this module's own test
-        # suite) greps `detail` for a field name via substring containment,
-        # which a list of error dicts does not support.
-        return ExecutionOutcome(False, {"reason": "payload_invalid", "detail": str(exc)})
+        # A field-by-field "loc: msg" string, not exc.errors() (a caller
+        # greps `detail` for a field name via substring containment, which a
+        # list of error dicts does not support) and not str(exc) (pydantic's
+        # default rendering embeds a https://errors.pydantic.dev/... doc
+        # link per error, which then gets persisted into execution_result).
+        detail = "; ".join(
+            f"{'.'.join(str(p) for p in e['loc'])}: {e['msg']}"
+            for e in exc.errors(include_url=False)
+        )
+        return ExecutionOutcome(False, {"reason": "payload_invalid", "detail": detail})
 
     # Spec 9.2 requires re-running policy for the original requester. Be
     # honest about what this currently buys: rbac.authorize is role-based
