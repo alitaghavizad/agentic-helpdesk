@@ -40,8 +40,23 @@ def test_refresh_token_hash_matches_stored_hash():
 
 
 def test_tampered_token_is_rejected():
+    """Tamper a character in the MIDDLE of the signature, not the last one.
+
+    The signature is base64url, and its final character can carry fewer
+    than 6 significant bits (the encoded byte length decides how many);
+    when it does, substituting it decodes to the identical byte string, so
+    the "tampered" token still verifies and the test fails spuriously. This
+    is what made this test intermittently red -- it was mislabelled a flake
+    for two phases. A mid-string base64 character always contributes a full
+    6 bits, so altering one always changes the decoded signature.
+    """
     token = create_access_token({"sub": "user-123", "role": "employee", "kind": "user"})
-    tampered = token[:-1] + ("A" if token[-1] != "A" else "B")
+    header_payload, _, signature = token.rpartition(".")
+    midpoint = len(signature) // 2
+    swapped = "A" if signature[midpoint] != "A" else "B"
+    tampered = f"{header_payload}.{signature[:midpoint]}{swapped}{signature[midpoint + 1:]}"
+
+    assert tampered != token
     with pytest.raises(jwt.InvalidSignatureError):
         decode_token(tampered)
 

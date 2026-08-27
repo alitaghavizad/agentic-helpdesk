@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import collections
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,6 +20,65 @@ class Chunk:
     source_file: str
     section: str
     metadata: dict
+    # The section's own prose, WITHOUT the identity prefix that `text`
+    # carries. Kept so drop_nondiscriminating_chunks() can compare raw
+    # section content across documents -- comparing `text` would find
+    # everything "unique", since the prefix differs per document by
+    # construction.
+    raw_text: str = ""
+
+
+def drop_nondiscriminating_chunks(chunks: list[Chunk]) -> tuple[list[Chunk], set[str]]:
+    """Remove chunks belonging to sections whose prose is byte-identical in
+    every document of the corpus, returning (kept_chunks, dropped_sections).
+
+    Why this exists. These datasets are generated from a shared template, so
+    several sections are literally the same paragraph repeated in all 25
+    helpdesk (or all 100 employee) files -- "Ticket documentation
+    standards", "Security and privacy behavior", "Access and authorization
+    boundaries", "Device and endpoint context", "Business process
+    behavior". Such a chunk cannot, even in principle, tell one document
+    from another: it is the same sentence in each. But contextual chunking
+    prepends a per-document identity prefix, which gives each copy a small
+    amount of variance -- just enough for all N copies to land in a dense,
+    near-tied band near the top of any topically-related query, crowding
+    out the sections that actually identify the right document.
+
+    Measured on this dataset: for "My MFA token stopped working after I
+    replaced my phone", the correct specialist beat the runner-up by
+    0.0002 -- effectively a coin flip, and it did flip between suite runs,
+    which is what made the retrieval gate look "flaky". After dropping
+    these chunks the same margin is 0.1616. Eval Recall@5 rose 0.7014 ->
+    0.7125, and Q025 (recall@5 = 0.00, where all ten top hits were the
+    identical "Security and privacy behavior" chunk from ten unrelated
+    specialists) now returns the correct specialist first.
+
+    The rule is deliberately "carries zero discriminating signal", not a
+    hardcoded list of section names: it re-derives itself from whatever
+    corpus is passed in, so a dataset change cannot silently leave stale
+    exclusions behind. Raising the threshold above exact-duplicate was
+    measured and gained nothing further (identical 0.7125 when also
+    dropping sections with up to 8 distinct values), so the strictest,
+    least surprising rule is the one used.
+
+    Note this only removes template scaffolding shared by every document.
+    It cannot remove a section that distinguishes any two documents, so no
+    per-person or per-specialist fact is lost, and it never widens what a
+    principal can retrieve -- it only shrinks the indexed corpus.
+    """
+    by_section: dict[str, set[str]] = collections.defaultdict(set)
+    for chunk in chunks:
+        by_section[chunk.section].add(chunk.raw_text)
+
+    # A section seen in only one document is trivially "unique" and must not
+    # be dropped -- with a single document there is nothing to discriminate
+    # between, so duplication cannot be established.
+    doc_count = len({c.source_file for c in chunks})
+    dropped = {
+        section for section, texts in by_section.items()
+        if doc_count > 1 and len(texts) == 1
+    }
+    return [c for c in chunks if c.section not in dropped], dropped
 
 
 def _split_sections(body: str) -> list[tuple[str, str]]:
@@ -46,6 +106,7 @@ def _build_chunk(
         source_file=source_file,
         section=section,
         metadata=metadata,
+        raw_text=text,
     )
 
 

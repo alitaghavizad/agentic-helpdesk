@@ -16,7 +16,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend"))
 
 from app.db.models import RunStatus, RunTrigger  # noqa: E402
-from app.rag.chunking import chunk_employee_file, chunk_helpdesk_file  # noqa: E402
+from app.rag.chunking import (  # noqa: E402
+    chunk_employee_file,
+    chunk_helpdesk_file,
+    drop_nondiscriminating_chunks,
+)
 from app.rag.backend import get_rag_backend  # noqa: E402
 from app.tracing import end_run, start_run  # noqa: E402
 
@@ -91,8 +95,37 @@ async def main() -> None:
                     "-- refusing to silently 'succeed' with an empty ingestion."
                 )
 
+            # Drop template scaffolding that is byte-identical across every
+            # document -- it cannot discriminate between documents but does
+            # crowd the top-k with a near-tied band, which is what made the
+            # retrieval gate oscillate. See drop_nondiscriminating_chunks'
+            # docstring for the measured before/after.
+            employee_chunks, dropped_employee = drop_nondiscriminating_chunks(employee_chunks)
+            helpdesk_chunks, dropped_helpdesk = drop_nondiscriminating_chunks(helpdesk_chunks)
+
+            for collection, dropped in (("employees", dropped_employee), ("helpdesk", dropped_helpdesk)):
+                if dropped:
+                    print(
+                        f"  {collection}: skipping {len(dropped)} non-discriminating section(s) "
+                        f"(identical in every document): {', '.join(sorted(dropped))}",
+                        file=sys.stderr,
+                    )
+
             n_employees = await _ingest_collection(backend, "employees", employee_chunks)
             n_helpdesk = await _ingest_collection(backend, "helpdesk", helpdesk_chunks)
+
+            # NOTE -- changing which chunks get produced (e.g. the
+            # non-discriminating filter above) requires DROPPING the
+            # collections and re-ingesting, not just re-running this script.
+            # upsert() only adds or replaces, so chunks a previous ingestion
+            # wrote would otherwise linger. Deleting them by id is NOT a
+            # valid substitute: Chroma's HNSW index degrades sharply when
+            # vectors are deleted rather than rebuilt. Measured on this
+            # dataset with byte-identical final content -- Recall@5 was
+            # 0.6069 after deleting the stale ids in place, versus 0.7125
+            # after dropping both collections and re-ingesting from
+            # scratch. Use scripts/recreate_chroma.sh (or delete the
+            # `employees`/`helpdesk` collections) before re-ingesting.
 
             print(f"Ingested {n_employees} employee chunks, {n_helpdesk} helpdesk chunks.", file=sys.stderr)
             end_run(handle, status=RunStatus.OK)

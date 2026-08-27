@@ -2,7 +2,12 @@ from pathlib import Path
 
 import pytest
 
-from app.rag.chunking import OVERVIEW_SECTION, chunk_employee_file, chunk_helpdesk_file
+from app.rag.chunking import (
+    OVERVIEW_SECTION,
+    chunk_employee_file,
+    chunk_helpdesk_file,
+    drop_nondiscriminating_chunks,
+)
 
 DATASET_DIR = Path(__file__).resolve().parent.parent.parent / "corporate_rag_dataset"
 
@@ -103,3 +108,51 @@ def test_chunk_helpdesk_file_every_chunk_text_has_identity_prefix():
     )
     for chunk in chunks:
         assert chunk.text.startswith(expected_prefix)
+
+
+def test_drop_nondiscriminating_chunks_removes_sections_identical_across_all_docs():
+    """Root cause of the retrieval instability this fixes: sections whose
+    prose is byte-identical in every document (helpdesk "Ticket
+    documentation standards" and "Security and privacy behavior"; employee
+    "Access and authorization boundaries", "Device and endpoint context",
+    "Business process behavior") cannot tell two documents apart, but their
+    per-document identity prefixes give them just enough variance to spread
+    into a dense near-tied band that occupies top-k slots.
+
+    Measured before this change: for "My MFA token stopped working after I
+    replaced my phone", the correct specialist won by a margin of 0.0002 --
+    a coin flip that flipped between suite runs. Dropping these chunks
+    widened it to 0.1616, and fixed Q025 ("Which helpdesk member should
+    receive a ticket primarily about Identity and Access Management?"),
+    which scored recall@5 = 0.00 because every top hit was the identical
+    "Security and privacy behavior" chunk from an unrelated specialist.
+    """
+    chunks = [c for f in sorted((DATASET_DIR / "helpdesk").glob("HD-*.md")) for c in chunk_helpdesk_file(f)]
+
+    kept, dropped_sections = drop_nondiscriminating_chunks(chunks)
+
+    assert "Ticket documentation standards" in dropped_sections
+    assert "Security and privacy behavior" in dropped_sections
+    # Sections that genuinely differ per specialist must survive -- these
+    # are what routing actually depends on.
+    assert "Overview" not in dropped_sections
+    assert "Routing guidance" not in dropped_sections
+    assert "Diagnostic approach" not in dropped_sections
+
+    kept_sections = {c.section for c in kept}
+    assert kept_sections.isdisjoint(dropped_sections)
+    assert len(kept) < len(chunks)
+    # Every surviving section still has exactly one chunk per document.
+    assert len(kept) == 25 * len(kept_sections)
+
+
+def test_drop_nondiscriminating_chunks_keeps_a_corpus_with_no_boilerplate_intact():
+    """The rule is "this section cannot discriminate", not "drop a fixed
+    list of section names". A single-document corpus has no cross-document
+    duplication at all, so nothing may be dropped."""
+    chunks = chunk_helpdesk_file(DATASET_DIR / "helpdesk" / "HD-001_Noah_Taylor.md")
+
+    kept, dropped_sections = drop_nondiscriminating_chunks(chunks)
+
+    assert dropped_sections == set()
+    assert len(kept) == len(chunks)

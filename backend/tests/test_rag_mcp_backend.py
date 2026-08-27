@@ -143,7 +143,7 @@ async def test_mcp_backend_upsert_is_idempotent_by_id(mcp_backend, drop_chroma_c
         drop_chroma_collection(collection)
 
 
-async def test_mcp_backend_upsert_and_query_record_mcp_spans(mcp_backend, cleanup_run):
+async def test_mcp_backend_upsert_and_query_record_mcp_spans(mcp_backend, cleanup_run, drop_chroma_collection):
     from app.db.models import RunTrigger, SpanKind
     from app.tracing import end_run, start_run, trace_tree
 
@@ -170,3 +170,9 @@ async def test_mcp_backend_upsert_and_query_record_mcp_spans(mcp_backend, cleanu
         assert all(node.span.duration_ms is not None and node.span.duration_ms >= 0 for node in trace.roots)
     finally:
         cleanup_run(handle.run_id)
+        # Without this the collection leaks into shared Chroma on every run,
+        # unlike the four sibling tests above which all drop theirs. Left
+        # unfixed since Phase 4 it had accumulated 45 orphaned
+        # test_mcp_spans_* collections, and that churn was the standing
+        # explanation for the retrieval gate's "flakiness".
+        drop_chroma_collection(collection)
