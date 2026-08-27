@@ -293,7 +293,8 @@ git commit -m "Enforce the no-email-without-approval invariant in the database"
 - Consumes: nothing. This module has no database dependency and imports nothing from `app.db`.
 - Produces:
   - `broker.publish(user_id: uuid.UUID, event: dict) -> None`
-  - `broker.subscribe(user_id: uuid.UUID) -> Subscription` (context manager yielding an object with `async def __anext__`)
+  - `broker.subscribe(user_id: uuid.UUID) -> Subscription` — a SYNC context manager yielding an object consumed with `await sub.get()`
+  - `broker.SubscriberDropped` — raised by `get()` once a subscriber that fell behind has delivered its buffered events; the SSE endpoint MUST catch it and close the stream
   - `broker.subscriber_count(user_id: uuid.UUID) -> int`
   - Task 3 calls `publish`; Task 8 calls `subscribe`.
 
@@ -2487,6 +2488,13 @@ async def stream_notifications(principal: CurrentPrincipal, db: DbSession) -> St
                 except asyncio.TimeoutError:
                     yield ": keepalive\n\n"
                     continue
+                except broker.SubscriberDropped:
+                    # This client fell too far behind and the broker stopped
+                    # queueing for it. Close the stream rather than pretend it is
+                    # still live: the browser reconnects and the replay above
+                    # re-delivers everything it missed from the database, so
+                    # nothing durable is lost.
+                    return
                 if event.get("id") in seen:
                     continue
                 seen.add(event.get("id"))
