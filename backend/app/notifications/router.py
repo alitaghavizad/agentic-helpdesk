@@ -1,8 +1,13 @@
 """The per-user notification feed and its SSE channel (spec 10).
 
-The stream SUBSCRIBES BEFORE IT REPLAYS. Replaying first and subscribing
-afterwards would silently drop anything published in the gap between the
-two, which is exactly the window a busy admin approving a queue would hit.
+The stream SUBSCRIBES BEFORE IT READS THE BACKLOG. What matters is the
+order of the SUBSCRIBE and the DATABASE READ, not the order of the
+subscribe and the emit -- reading first and subscribing after would leave
+a notification that commits in between in neither place: absent from the
+already-taken snapshot, and undelivered because nothing was listening
+yet. Subscribing first makes the two sources overlap instead of leaving a
+gap, and the `seen` set exists to collapse that overlap.
+
 Events are deduplicated by id so a row that is both replayed and published
 arrives once.
 
@@ -78,19 +83,22 @@ def mark_notification_read(
 @router.get("/stream")
 async def stream_notifications(principal: CurrentPrincipal, db: DbSession) -> StreamingResponse:
     user_id = _require_user(principal)
-    unread = [
-        {
-            "type": r.type.value, "id": str(r.id), "title": r.title, "body": r.body,
-            "link_type": r.link_type, "link_id": str(r.link_id) if r.link_id else None,
-            "created_at": r.created_at.isoformat() if r.created_at else None,
-        }
-        for r in service.list_for_user(db, user_id, unread_only=True)
-    ]
 
     async def event_stream():
         seen: set[str] = set()
+        # SUBSCRIBE FIRST, THEN READ THE BACKLOG. The database read must
+        # happen after the subscription exists, or a notification committed
+        # between the two is in neither: absent from the snapshot because it
+        # committed after the query, and undelivered because nothing was
+        # listening yet. Subscribing first makes the two sources overlap
+        # instead of leaving a gap, and `seen` below collapses that overlap.
         with broker.subscribe(user_id) as subscription:
-            for event in unread:
+            for r in service.list_for_user(db, user_id, unread_only=True):
+                event = {
+                    "type": r.type.value, "id": str(r.id), "title": r.title, "body": r.body,
+                    "link_type": r.link_type, "link_id": str(r.link_id) if r.link_id else None,
+                    "created_at": r.created_at.isoformat() if r.created_at else None,
+                }
                 seen.add(event["id"])
                 yield f"data: {json.dumps(event)}\n\n"
             while True:
