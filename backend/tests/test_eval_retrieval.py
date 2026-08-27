@@ -22,22 +22,32 @@ import eval_retrieval  # noqa: E402
 # "chosen" 6 from the other 79 equally-valid matches. This was verified directly against
 # the live dataset and independently reproduced twice.
 #
-# This floor is set to 0.69 -- a small margin below the accepted 0.6958 baseline -- so the
-# test doesn't flake on minor embedding nondeterminism run-to-run, while still catching a
-# genuine future regression (e.g. a real chunking/ingestion break, not the known artifact).
-ACCEPTED_RECALL_5_FLOOR = 0.69
+# 2026-08-27: the floor is now the spec's real 0.70. The old 0.69 was set below the then-
+# achieved 0.6958, and that gap turned out to be load-bearing in the wrong direction: it let
+# a genuinely regressed index (a re-ingest over a pre-filter collection reconstitutes the old
+# corpus and measures exactly 0.6958) pass as green. The remaining boilerplate was then
+# removed at ingestion -- see app.rag.chunking.drop_nondiscriminating_chunks -- taking a
+# clean rebuild to 0.7125, so the honest spec threshold is now achievable and is what we
+# assert. Headroom is genuinely thin (~0.01), which is deliberate: this number sitting just
+# above its gate is information, and burying it under a lower floor is exactly how the
+# earlier regression stayed invisible for two build phases.
+ACCEPTED_RECALL_5_FLOOR = 0.70
 
 # When this test runs as part of the full suite (not in isolation), it lands right after
 # several other tests (test_rag_direct_backend.py, test_rag_mcp_backend.py,
 # test_rag_backend_equivalence.py, test_ingest_dataset.py) that create, query, and delete
-# dozens of Chroma collections in quick succession. Empirically, a query issued immediately
-# after that churn can observe a transient Chroma read-after-write consistency lag -- e.g. a
-# single real measurement of Recall@5=0.5646 that fully recovered to the normal 0.6958 on
-# the very next measurement seconds later, with no code or data change in between. This is
-# not the "settled state" of the index (confirmed by re-measuring repeatedly afterward, with
-# nothing else running, and getting 0.6958 every time) -- it is a short-lived window right
-# after heavy concurrent writes from sibling tests, not a permanent characteristic of this
-# retriever. Retry once after a short wait rather than fail spuriously on that window.
+# Chroma collections in quick succession, and test_ingest_dataset.py performs two full
+# in-place re-upserts of both shared collections. A query issued immediately after that
+# churn can read a briefly-perturbed index, so one retry after a short wait is kept.
+#
+# 2026-08-27 correction: the churn was previously blamed on "transient read-after-write
+# consistency lag", and that explanation was doing too much work -- it was also used to wave
+# away readings that were in fact a real, reproducible quality regression. Two concrete
+# contributors have since been found and fixed: test_rag_mcp_backend.py leaked a Chroma
+# collection on every run (45 had accumulated), and template chunks identical across every
+# document were producing near-tied rankings decided by noise. Treat a failure here as real
+# until measured otherwise -- do not re-label it a flake without re-running the eval and
+# reading the actual number.
 RECALL_5_RETRY_WAIT_SECONDS = 5
 RECALL_5_MAX_ATTEMPTS = 2
 

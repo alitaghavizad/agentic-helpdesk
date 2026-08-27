@@ -45,6 +45,50 @@ async def _ingest_collection(backend, collection: str, chunks: list) -> int:
     return len(chunks)
 
 
+def _verify_no_stale_chunks(expected_counts: dict[str, int]) -> None:
+    """Fail loudly when a collection holds more chunks than this ingestion
+    produced -- i.e. leftovers from an earlier run with different chunking.
+
+    This guard exists because the failure it catches is otherwise
+    completely silent, and self-healing in the worst way. `upsert()` only
+    adds or replaces, and chunk ids are `{source_file}::chunk-{index}` with
+    indices NOT renumbered after filtering, so re-running this script over
+    a pre-filter collection rewrites the kept chunks in place and leaves
+    every dropped chunk exactly where it was -- reconstituting the old
+    corpus byte for byte. Ingestion reports success. Worse, the resulting
+    Recall@5 (measured: 0.6958) still clears the eval test's floor, so the
+    suite reports green too, while the routing gate quietly returns to
+    deciding near-ties on template boilerplate.
+
+    Deleting the stale ids is NOT a valid remedy: Chroma's HNSW index
+    degrades sharply when vectors are deleted rather than rebuilt. With
+    byte-identical final content, Recall@5 measured 0.6069 after deleting
+    stale ids in place versus 0.7125 after dropping the collections and
+    re-ingesting from scratch. Drop the collections and re-ingest.
+    """
+    import chromadb
+
+    from app.config import get_settings
+    from app.rag.direct_client import _parse_chroma_url
+
+    host, port = _parse_chroma_url(get_settings().chroma_url)
+    client = chromadb.HttpClient(host=host, port=port)
+    for collection, expected in expected_counts.items():
+        try:
+            actual = client.get_collection(collection).count()
+        except Exception as exc:  # collection genuinely absent, or Chroma unreachable
+            print(f"  warning: could not verify {collection!r} chunk count: {exc}", file=sys.stderr)
+            continue
+        if actual > expected:
+            raise RuntimeError(
+                f"{collection!r} holds {actual} chunks but this ingestion produced {expected}. "
+                f"{actual - expected} stale chunk(s) remain from an earlier run with different "
+                "chunking, which silently restores the old corpus. Drop the collection and "
+                "re-ingest -- do not delete the stale ids, which degrades Chroma's HNSW index "
+                "(measured Recall@5 0.6069 deleted-in-place vs 0.7125 rebuilt)."
+            )
+
+
 def _check_dataset_dirs() -> None:
     """Path.glob() on a nonexistent directory returns an empty iterator
     rather than raising, which would otherwise make a missing/misconfigured
@@ -114,18 +158,7 @@ async def main() -> None:
             n_employees = await _ingest_collection(backend, "employees", employee_chunks)
             n_helpdesk = await _ingest_collection(backend, "helpdesk", helpdesk_chunks)
 
-            # NOTE -- changing which chunks get produced (e.g. the
-            # non-discriminating filter above) requires DROPPING the
-            # collections and re-ingesting, not just re-running this script.
-            # upsert() only adds or replaces, so chunks a previous ingestion
-            # wrote would otherwise linger. Deleting them by id is NOT a
-            # valid substitute: Chroma's HNSW index degrades sharply when
-            # vectors are deleted rather than rebuilt. Measured on this
-            # dataset with byte-identical final content -- Recall@5 was
-            # 0.6069 after deleting the stale ids in place, versus 0.7125
-            # after dropping both collections and re-ingesting from
-            # scratch. Use scripts/recreate_chroma.sh (or delete the
-            # `employees`/`helpdesk` collections) before re-ingesting.
+            _verify_no_stale_chunks({"employees": n_employees, "helpdesk": n_helpdesk})
 
             print(f"Ingested {n_employees} employee chunks, {n_helpdesk} helpdesk chunks.", file=sys.stderr)
             end_run(handle, status=RunStatus.OK)

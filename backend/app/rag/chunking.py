@@ -24,8 +24,10 @@ class Chunk:
     # carries. Kept so drop_nondiscriminating_chunks() can compare raw
     # section content across documents -- comparing `text` would find
     # everything "unique", since the prefix differs per document by
-    # construction.
-    raw_text: str = ""
+    # construction. Deliberately required, not defaulted: a Chunk built
+    # without it would compare equal to every other such Chunk and take its
+    # whole section down with it.
+    raw_text: str
 
 
 def drop_nondiscriminating_chunks(chunks: list[Chunk]) -> tuple[list[Chunk], set[str]]:
@@ -44,14 +46,21 @@ def drop_nondiscriminating_chunks(chunks: list[Chunk]) -> tuple[list[Chunk], set
     near-tied band near the top of any topically-related query, crowding
     out the sections that actually identify the right document.
 
-    Measured on this dataset: for "My MFA token stopped working after I
-    replaced my phone", the correct specialist beat the runner-up by
-    0.0002 -- effectively a coin flip, and it did flip between suite runs,
-    which is what made the retrieval gate look "flaky". After dropping
-    these chunks the same margin is 0.1616. Eval Recall@5 rose 0.7014 ->
-    0.7125, and Q025 (recall@5 = 0.00, where all ten top hits were the
-    identical "Security and privacy behavior" chunk from ten unrelated
-    specialists) now returns the correct specialist first.
+    Measured on this dataset, comparing clean rebuilds of the corpus with
+    and without these chunks: eval Recall@5 rose 0.6958 -> 0.7125 (above
+    spec section 7.3's 0.70 gate), MRR 0.7750 -> 0.8108. The routing
+    margin -- how far the correct specialist beats the runner-up -- widened
+    from 0.0620 to 0.2523 for the VPN query and 0.0995 to 0.1616 for the
+    MFA one. Q025 ("Which helpdesk member should receive a ticket primarily
+    about Identity and Access Management?") went from recall@5 = 0.00, with
+    all ten top hits being the identical "Security and privacy behavior"
+    chunk from ten unrelated specialists, to returning HD-001 first.
+
+    Most telling: before this change the *winning* chunk for both the VPN
+    and MFA queries was "Ticket documentation standards" -- prose identical
+    across all 25 specialists, carrying no information about which
+    specialist won. Ranking was decided by noise. Afterwards both win on
+    "Diagnostic approach", real per-specialist content.
 
     The rule is deliberately "carries zero discriminating signal", not a
     hardcoded list of section names: it re-derives itself from whatever
@@ -61,22 +70,30 @@ def drop_nondiscriminating_chunks(chunks: list[Chunk]) -> tuple[list[Chunk], set
     dropping sections with up to 8 distinct values), so the strictest,
     least surprising rule is the one used.
 
-    Note this only removes template scaffolding shared by every document.
-    It cannot remove a section that distinguishes any two documents, so no
-    per-person or per-specialist fact is lost, and it never widens what a
-    principal can retrieve -- it only shrinks the indexed corpus.
+    A section is dropped only when it appears in EVERY document and is
+    identical in all of them. Presence in only some documents is itself
+    highly discriminating, so such a section is kept even though it has a
+    single distinct value. This means no per-person or per-specialist fact
+    can be lost, and the filter never widens what a principal may retrieve
+    -- it only ever shrinks the indexed corpus.
     """
-    by_section: dict[str, set[str]] = collections.defaultdict(set)
+    by_section_texts: dict[str, set[str]] = collections.defaultdict(set)
+    by_section_docs: dict[str, set[str]] = collections.defaultdict(set)
     for chunk in chunks:
-        by_section[chunk.section].add(chunk.raw_text)
+        by_section_texts[chunk.section].add(chunk.raw_text)
+        by_section_docs[chunk.section].add(chunk.source_file)
 
-    # A section seen in only one document is trivially "unique" and must not
-    # be dropped -- with a single document there is nothing to discriminate
-    # between, so duplication cannot be established.
-    doc_count = len({c.source_file for c in chunks})
+    all_docs = {c.source_file for c in chunks}
     dropped = {
-        section for section, texts in by_section.items()
-        if doc_count > 1 and len(texts) == 1
+        section
+        for section, texts in by_section_texts.items()
+        # >1 document: with a single document there is nothing to
+        # discriminate between, so duplication cannot be established.
+        if len(all_docs) > 1
+        and len(texts) == 1
+        # Present in every document -- a section only some documents have
+        # identifies those documents, however uniform its prose.
+        and by_section_docs[section] == all_docs
     }
     return [c for c in chunks if c.section not in dropped], dropped
 

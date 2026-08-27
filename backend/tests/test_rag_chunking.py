@@ -4,6 +4,7 @@ import pytest
 
 from app.rag.chunking import (
     OVERVIEW_SECTION,
+    Chunk,
     chunk_employee_file,
     chunk_helpdesk_file,
     drop_nondiscriminating_chunks,
@@ -156,3 +157,43 @@ def test_drop_nondiscriminating_chunks_keeps_a_corpus_with_no_boilerplate_intact
 
     assert dropped_sections == set()
     assert len(kept) == len(chunks)
+
+
+def _fake_chunk(source_file: str, section: str, raw_text: str) -> Chunk:
+    return Chunk(
+        id=f"{source_file}::{section}",
+        text=f"Doc: {source_file}\n\n{raw_text}",
+        chunk_index=0, source_file=source_file, section=section,
+        metadata={"source_file": source_file, "section": section}, raw_text=raw_text,
+    )
+
+
+def test_drop_nondiscriminating_chunks_keeps_a_section_only_some_documents_have():
+    """A section present in only SOME documents is highly discriminating --
+    its very presence identifies those documents -- even though its prose
+    has a single distinct value. Dropping it would delete a real fact.
+    An earlier version of this function counted documents corpus-wide
+    rather than per-section and got this wrong."""
+    chunks = [_fake_chunk(f"doc{i}.md", "Everywhere", "same everywhere") for i in range(5)]
+    chunks += [_fake_chunk(f"doc{i}.md", "Overview", f"unique to doc{i}") for i in range(5)]
+    # Present in 2 of the 5 documents, identical in both.
+    chunks += [_fake_chunk(f"doc{i}.md", "Clearance history", "identical text") for i in range(2)]
+
+    kept, dropped = drop_nondiscriminating_chunks(chunks)
+
+    assert dropped == {"Everywhere"}
+    assert "Clearance history" in {c.section for c in kept}
+
+
+def test_drop_nondiscriminating_chunks_keeps_a_section_with_only_two_distinct_values():
+    """The threshold is exact duplication, not "nearly duplicated". A
+    section with even two distinct values can tell some documents apart,
+    and loosening this was measured to gain nothing (identical Recall@5
+    when also dropping sections with up to 8 distinct values)."""
+    chunks = [_fake_chunk(f"doc{i}.md", "Escalation rules", "A" if i % 2 else "B") for i in range(6)]
+    chunks += [_fake_chunk(f"doc{i}.md", "Boilerplate", "identical") for i in range(6)]
+
+    kept, dropped = drop_nondiscriminating_chunks(chunks)
+
+    assert dropped == {"Boilerplate"}
+    assert "Escalation rules" in {c.section for c in kept}
