@@ -60,22 +60,46 @@ async def test_ingest_dataset_closes_backend_on_chunking_failure(monkeypatch):
     assert aclose_calls == [True]
 
 
-async def test_ingest_dataset_populates_both_collections_and_is_idempotent():
-    await ingest_dataset.main()
+async def test_ingest_dataset_populates_both_collections_and_is_idempotent(
+    drop_chroma_collection,
+):
+    try:
+        await ingest_dataset.main()
 
-    settings = get_settings()
-    parsed = urlparse(settings.chroma_url)
-    client = chromadb.HttpClient(host=parsed.hostname, port=parsed.port)
+        settings = get_settings()
+        parsed = urlparse(settings.chroma_url)
+        client = chromadb.HttpClient(host=parsed.hostname, port=parsed.port)
 
-    employees_count_1 = client.get_collection("employees").count()
-    helpdesk_count_1 = client.get_collection("helpdesk").count()
-    assert employees_count_1 > 0
-    assert helpdesk_count_1 > 0
+        employees_count_1 = client.get_collection("employees").count()
+        helpdesk_count_1 = client.get_collection("helpdesk").count()
+        assert employees_count_1 > 0
+        assert helpdesk_count_1 > 0
 
-    # Re-run: idempotent, no duplication -- document counts must not change.
-    await ingest_dataset.main()
-    employees_count_2 = client.get_collection("employees").count()
-    helpdesk_count_2 = client.get_collection("helpdesk").count()
+        # Re-run: idempotent, no duplication -- document counts must not change.
+        await ingest_dataset.main()
+        employees_count_2 = client.get_collection("employees").count()
+        helpdesk_count_2 = client.get_collection("helpdesk").count()
 
-    assert employees_count_2 == employees_count_1
-    assert helpdesk_count_2 == helpdesk_count_1
+        assert employees_count_2 == employees_count_1
+        assert helpdesk_count_2 == helpdesk_count_1
+    finally:
+        # This test calls main() twice against the REAL employees/helpdesk
+        # collections (there's no isolated test_* namespace for RAG data),
+        # and main() upserts in place rather than rebuilding the index.
+        # Repeated in-place upsert over byte-identical content measurably
+        # degrades Chroma's HNSW graph: a clean drop-and-re-ingest measures
+        # Recall@5 = 0.7125, but after this test ran (twice-upserted) in a
+        # full-suite run, test_eval_retrieval's measured Recall@5 dropped to
+        # ~0.5708 (or only limped to the gate by burning its retry, ~115s
+        # instead of ~30s). test_eval_retrieval sorts BEFORE this file
+        # alphabetically ("e" < "i"), so the contamination is not within a
+        # single run -- this run's ingest degrades the index that the NEXT
+        # full-suite run's eval measures, which is why it looked like
+        # intermittent flakiness rather than a deterministic ordering
+        # problem. Dropping both collections and re-ingesting once from
+        # scratch is the only thing that was observed to restore Recall@5 to
+        # 0.7125, so we leave the collections in that state regardless of
+        # whether the assertions above passed.
+        drop_chroma_collection("employees")
+        drop_chroma_collection("helpdesk")
+        await ingest_dataset.main()
