@@ -63,20 +63,55 @@ def test_publish_happens_on_commit_not_before(db_session, user):
         broker.publish = original
 
 
-def test_nothing_is_published_when_the_transaction_rolls_back(db_session, user):
+def test_a_rolled_back_notification_is_not_published_by_a_later_commit(db_session, user):
+    """The load-bearing version. Asserting 'nothing was published' right
+    after a rollback proves nothing, because publishing only ever happens on
+    commit -- that assertion holds even with the discard logic deleted. The
+    real question is whether the discarded notification leaks into the NEXT
+    commit on the same session, which is the only way the bug could bite."""
+    # Checkpoint: the `user` fixture only flushed its row, it never
+    # committed. Under db_session's create_savepoint join mode, the
+    # rollback() below returns to the last commit -- without this commit
+    # first, it would undo the user row too and the second notify() below
+    # would hit a ForeignKeyViolation instead of exercising the discard path.
+    db_session.commit()
     published: list[dict] = []
     original = broker.publish
     broker.publish = lambda uid, event: published.append(event)
     try:
         service.notify(
             db_session, user_id=user.id, type=NotificationType.TICKET_CREATED,
-            title="Created", body="TCK-000002",
+            title="Rolled back", body="b",
         )
         db_session.flush()
         db_session.rollback()
-        assert published == []
+
+        service.notify(
+            db_session, user_id=user.id, type=NotificationType.TICKET_RESOLVED,
+            title="Committed", body="b",
+        )
+        db_session.commit()
+
+        assert [e["title"] for e in published] == ["Committed"]
     finally:
         broker.publish = original
+
+
+def test_two_notifications_in_one_transaction_keep_their_creation_order(db_session, user):
+    """Postgres now() is constant across a transaction, so relying on the
+    column default put the feed in random-uuid order."""
+    first = service.notify(
+        db_session, user_id=user.id, type=NotificationType.TICKET_CREATED,
+        title="First", body="b",
+    )
+    second = service.notify(
+        db_session, user_id=user.id, type=NotificationType.TICKET_ASSIGNED,
+        title="Second", body="b",
+    )
+    db_session.commit()
+
+    assert first.created_at < second.created_at
+    assert [n.title for n in service.list_for_user(db_session, user.id)] == ["First", "Second"]
 
 
 def test_mark_read_sets_read_at_and_scopes_to_the_owner(db_session, user):

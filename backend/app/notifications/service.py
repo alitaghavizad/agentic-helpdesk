@@ -13,6 +13,7 @@ never survive a mutation that was undone.
 """
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import datetime, timezone
 
@@ -21,6 +22,8 @@ from sqlalchemy.orm import Session
 
 from app.db.models import Notification, NotificationType
 from app.notifications import broker
+
+logger = logging.getLogger(__name__)
 
 _PENDING_KEY = "_phase6_pending_notifications"
 
@@ -40,7 +43,15 @@ def _event_payload(row: Notification) -> dict:
 def _flush_pending(session: Session) -> None:
     pending = session.info.pop(_PENDING_KEY, [])
     for row in pending:
-        broker.publish(row.user_id, _event_payload(row))
+        try:
+            broker.publish(row.user_id, _event_payload(row))
+        except Exception:  # noqa: BLE001
+            # after_commit runs AFTER the database write succeeded. Letting a
+            # fan-out failure escape would surface as a failed commit() to the
+            # caller, who might retry an operation that actually committed.
+            # The row is durable; a client that missed the live event replays
+            # it from the database on reconnect.
+            logger.exception("failed to publish notification %s", row.id)
 
 
 def _discard_pending(session: Session) -> None:
@@ -96,6 +107,13 @@ def notify(
         body=body,
         link_type=link_type,
         link_id=link_id,
+        # Set explicitly rather than left to the column's server_default.
+        # Postgres's now() is the TRANSACTION start time, so every
+        # notification created in one transaction would share a timestamp and
+        # the feed would fall through to ordering by a random uuid4. A caller
+        # that notifies twice in one request would show the user its two
+        # notifications in arbitrary order.
+        created_at=datetime.now(timezone.utc),
     )
     db.add(row)
     db.flush()
