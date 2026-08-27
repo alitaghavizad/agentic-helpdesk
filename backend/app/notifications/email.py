@@ -51,7 +51,15 @@ def allowlist_patterns() -> list[str]:
 def is_allowed_recipient(address: str, patterns: list[str]) -> bool:
     if not address or not patterns:
         return False
+    if any(ch in address for ch in "\r\n"):
+        # A newline in an address is header-injection shaped, and fnmatch
+        # will not stop it -- '*@example.test' happily matches
+        # 'x\r\nBcc:evil@evil.test@example.test'. Reject before it can reach
+        # EmailMessage, which would raise and strand the row at 'queued'.
+        return False
     candidate = address.strip().lower()
+    if not candidate:
+        return False
     return any(fnmatch.fnmatch(candidate, p.strip().lower()) for p in patterns)
 
 
@@ -116,17 +124,20 @@ def send(
         return row
 
     settings = get_settings()
-    message = EmailMessage()
-    message["From"] = settings.smtp_from
-    message["To"] = to_address
-    message["Subject"] = subject
-    message.set_content(body)
-
     try:
+        message = EmailMessage()
+        message["From"] = settings.smtp_from
+        message["To"] = to_address
+        message["Subject"] = subject
+        message.set_content(body)
         row.smtp_response = _transport.send(message, to_address=to_address)
         row.status = EmailStatus.SENT
         row.sent_at = datetime.now(timezone.utc)
     except Exception as exc:  # noqa: BLE001 -- every failure is recorded, never raised
+        # Header construction is inside this block deliberately. EmailMessage
+        # raises ValueError on a CR/LF in any header value, and a send() that
+        # raises would leave the row flushed above stuck at 'queued' forever
+        # -- the one state that means "we do not know what happened".
         row.status = EmailStatus.FAILED
         row.smtp_response = f"{type(exc).__name__}: {exc}"
     db.flush()

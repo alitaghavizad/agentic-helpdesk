@@ -71,6 +71,17 @@ def test_empty_allowlist_fails_closed():
     assert email_module.is_allowed_recipient("anyone@anywhere.test", []) is False
 
 
+@pytest.mark.parametrize("bad", ["x\r\nBcc:evil@evil.test@northstar.example", "x\nevil@northstar.example"])
+def test_a_recipient_containing_a_newline_is_rejected(bad):
+    """fnmatch does not anchor the address side, so a wildcard pattern would
+    otherwise match a header-injection-shaped address."""
+    assert email_module.is_allowed_recipient(bad, ["*@northstar.example"]) is False
+
+
+def test_a_whitespace_only_recipient_is_rejected():
+    assert email_module.is_allowed_recipient("   ", ["*@northstar.example"]) is False
+
+
 # ---- send ---------------------------------------------------------------
 
 def test_send_to_an_allowlisted_address_records_sent(db_session, approved_request, transport):
@@ -108,6 +119,20 @@ def test_a_pending_approval_is_refused_before_any_row_is_written(db_session, app
             db_session, approval=approved_request,
             to_address="ops@northstar.example", subject="s", body="b",
         )
+
+
+def test_a_subject_with_a_newline_is_recorded_as_failed_not_raised(db_session, approved_request, transport):
+    """The row is flushed before the socket opens, so anything that raises
+    after that point must still land the row in a terminal state. A row left
+    at 'queued' is the one outcome that tells us nothing."""
+    row = email_module.send(
+        db_session, approval=approved_request,
+        to_address="ops@northstar.example",
+        subject="hello\r\nBcc: evil@evil.test", body="Body",
+    )
+    assert row.status is EmailStatus.FAILED
+    assert "ValueError" in row.smtp_response
+    assert transport.sent == [], "the socket must not open for a malformed message"
 
 
 def test_the_row_exists_even_when_the_socket_fails(db_session, approved_request, monkeypatch):
