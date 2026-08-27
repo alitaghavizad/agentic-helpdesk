@@ -499,7 +499,7 @@ def user(db_session):
     recorded Postgres fixture gotchas."""
     row = User(
         username=f"u{uuid.uuid4().hex[:10]}", email=f"{uuid.uuid4().hex[:10]}@northstar.example",
-        password_hash="x", role=Role.EMPLOYEE, is_active=True,
+        full_name="Test User", password_hash="x", role=Role.EMPLOYEE, is_active=True,
     )
     db_session.add(row)
     db_session.flush()
@@ -1145,7 +1145,7 @@ from app.db.models import (
 def requester(db_session):
     row = User(
         username=f"u{uuid.uuid4().hex[:10]}", email=f"{uuid.uuid4().hex[:10]}@northstar.example",
-        password_hash="x", role=Role.EMPLOYEE, is_active=True,
+        full_name="Test User", password_hash="x", role=Role.EMPLOYEE, is_active=True,
     )
     db_session.add(row)
     db_session.flush()
@@ -1756,7 +1756,7 @@ from app.rbac.policy import Principal
 def admin_principal(db_session):
     admin = User(
         username=f"a{_uuid.uuid4().hex[:10]}", email=f"{_uuid.uuid4().hex[:10]}@northstar.example",
-        password_hash="x", role=Role.ADMIN, is_active=True,
+        full_name="Test User", password_hash="x", role=Role.ADMIN, is_active=True,
     )
     db_session.add(admin)
     db_session.flush()
@@ -1770,7 +1770,7 @@ def admin_principal(db_session):
 def pending_request(db_session):
     requester = User(
         username=f"u{_uuid.uuid4().hex[:10]}", email=f"{_uuid.uuid4().hex[:10]}@northstar.example",
-        password_hash="x", role=Role.EMPLOYEE, is_active=True,
+        full_name="Test User", password_hash="x", role=Role.EMPLOYEE, is_active=True,
     )
     db_session.add(requester)
     conv = Conversation(guest_name="G", guest_email="g@northstar.example")
@@ -2560,7 +2560,7 @@ from app.tickets import service as tickets
 def helpdesk_user(db_session):
     row = User(
         username=f"hd{uuid.uuid4().hex[:8]}", email=f"{uuid.uuid4().hex[:8]}@northstar.example",
-        password_hash="x", role=Role.HELPDESK, helpdesk_ref="HD-905", is_active=True,
+        full_name="Test User", password_hash="x", role=Role.HELPDESK, helpdesk_ref="HD-905", is_active=True,
     )
     db_session.add(row)
     db_session.flush()
@@ -2617,7 +2617,7 @@ def test_an_approved_cross_department_assignment_notifies_exactly_once(
 def test_status_change_notifies_the_requester(db_session, make_ticket):
     requester = User(
         username=f"u{uuid.uuid4().hex[:8]}", email=f"{uuid.uuid4().hex[:8]}@northstar.example",
-        password_hash="x", role=Role.EMPLOYEE, is_active=True,
+        full_name="Test User", password_hash="x", role=Role.EMPLOYEE, is_active=True,
     )
     db_session.add(requester)
     db_session.flush()
@@ -2631,7 +2631,7 @@ def test_status_change_notifies_the_requester(db_session, make_ticket):
 def test_resolve_notifies_the_requester(db_session, make_ticket):
     requester = User(
         username=f"u{uuid.uuid4().hex[:8]}", email=f"{uuid.uuid4().hex[:8]}@northstar.example",
-        password_hash="x", role=Role.EMPLOYEE, is_active=True,
+        full_name="Test User", password_hash="x", role=Role.EMPLOYEE, is_active=True,
     )
     db_session.add(requester)
     db_session.flush()
@@ -2655,7 +2655,7 @@ def test_resolve_does_not_double_notify(db_session, make_ticket):
     get one TICKET_RESOLVED notification, not a status-changed one as well."""
     requester = User(
         username=f"u{uuid.uuid4().hex[:8]}", email=f"{uuid.uuid4().hex[:8]}@northstar.example",
-        password_hash="x", role=Role.EMPLOYEE, is_active=True,
+        full_name="Test User", password_hash="x", role=Role.EMPLOYEE, is_active=True,
     )
     db_session.add(requester)
     db_session.flush()
