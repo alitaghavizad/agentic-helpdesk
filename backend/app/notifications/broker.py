@@ -33,15 +33,29 @@ _DEFAULT_MAX_QUEUE = 100
 _subscribers: dict[uuid.UUID, set["Subscription"]] = defaultdict(set)
 
 
+class SubscriberDropped(RuntimeError):
+    """Raised to a consumer whose subscription fell behind and was dropped.
+    The SSE endpoint turns this into a closed stream; the client reconnects
+    and replays what it missed from the `notifications` table, which is why
+    dropping a slow subscriber loses nothing durable."""
+
+
 class Subscription:
-    """One connected SSE client. Iterate it with `await sub.get()`."""
+    """One connected SSE client. Await sub.get() to receive the next event,
+    or catch SubscriberDropped if the subscription fell behind."""
 
     def __init__(self, user_id: uuid.UUID, max_queue: int) -> None:
         self.user_id = user_id
         self.dropped = False
         self._queue: asyncio.Queue[dict] = asyncio.Queue(maxsize=max_queue)
+        try:
+            self._loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # Subscribed from sync context (only tests do this). Nothing is
+            # awaiting the queue, so a direct put_nowait is safe.
+            self._loop = None
 
-    def _offer(self, event: dict) -> None:
+    def _put(self, event: dict) -> None:
         if self.dropped:
             return
         try:
@@ -49,7 +63,37 @@ class Subscription:
         except asyncio.QueueFull:
             self.dropped = True
 
+    def _offer(self, event: dict) -> None:
+        """publish() is called from SQLAlchemy's after_commit, which runs on
+        whichever thread committed -- and because this project's endpoints
+        are sync `def`, Starlette runs them in a threadpool, NOT on the
+        event loop. Touching an asyncio.Queue from another thread races the
+        loop's internals, so cross-thread offers are marshalled back onto
+        the owning loop."""
+        if self.dropped:
+            return
+        if self._loop is not None:
+            try:
+                running = asyncio.get_running_loop()
+            except RuntimeError:
+                running = None
+            if running is not self._loop:
+                self._loop.call_soon_threadsafe(self._put, event)
+                return
+        self._put(event)
+
     async def get(self) -> dict:
+        """Raises SubscriberDropped once a dropped subscriber's buffered
+        events are exhausted.
+
+        Needs no wakeup mechanism, and that is worth understanding rather
+        than trusting: a subscriber is dropped ONLY when its queue is full,
+        so a consumer blocked here on an empty queue cannot be dropped
+        underneath it. The two states are mutually exclusive."""
+        if self.dropped and self._queue.empty():
+            raise SubscriberDropped(
+                f"subscriber for {self.user_id} fell behind and was dropped"
+            )
         return await self._queue.get()
 
 

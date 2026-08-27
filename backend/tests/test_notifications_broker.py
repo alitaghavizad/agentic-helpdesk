@@ -39,6 +39,7 @@ async def test_leaving_the_context_unregisters_the_subscriber():
     with broker.subscribe(user):
         assert broker.subscriber_count(user) == 1
     assert broker.subscriber_count(user) == 0
+    assert user not in broker._subscribers
 
 
 @pytest.mark.asyncio
@@ -51,3 +52,45 @@ async def test_a_subscriber_that_cannot_keep_up_is_dropped_not_allowed_to_block(
         for i in range(10):
             broker.publish(user, {"n": i})
         assert sub.dropped is True
+
+
+@pytest.mark.asyncio
+async def test_dropped_subscriber_delivers_buffered_events_then_raises():
+    """A subscriber is dropped when its queue is full, but buffered events
+    are still delivered. Once those are exhausted, get() raises SubscriberDropped."""
+    user = uuid.uuid4()
+    with broker.subscribe(user, max_queue=3) as sub:
+        # Publish 5 events; the first 3 go into the queue, the 4th and 5th
+        # cause dropped=True but don't get queued.
+        for i in range(5):
+            broker.publish(user, {"n": i})
+
+        # Receive the 3 buffered events
+        assert await asyncio.wait_for(sub.get(), timeout=1) == {"n": 0}
+        assert await asyncio.wait_for(sub.get(), timeout=1) == {"n": 1}
+        assert await asyncio.wait_for(sub.get(), timeout=1) == {"n": 2}
+
+        # Next get() raises SubscriberDropped
+        with pytest.raises(broker.SubscriberDropped):
+            await asyncio.wait_for(sub.get(), timeout=1)
+
+
+@pytest.mark.asyncio
+async def test_publish_from_worker_thread_is_safe():
+    """publish() is called from SQLAlchemy's after_commit hook on a worker
+    thread. Events published from another thread must be delivered safely."""
+    user = uuid.uuid4()
+    with broker.subscribe(user) as sub:
+        loop = asyncio.get_running_loop()
+
+        # Publish from a worker thread
+        await loop.run_in_executor(
+            None,
+            broker.publish,
+            user,
+            {"type": "from_worker_thread"}
+        )
+
+        # Event should be received despite coming from another thread
+        event = await asyncio.wait_for(sub.get(), timeout=2)
+        assert event == {"type": "from_worker_thread"}
