@@ -207,7 +207,7 @@ async def test_run_turn_emits_task_recorded_and_ticket_created_events(db_session
     conv = _conversation(db_session)
     client = FakeAnthropicClient([
         make_tool_use_message(tool_name="record_task", tool_input={
-            "conversation_id": str(conv.id), "title": "VPN broken", "category": "vpn_network",
+            "title": "VPN broken", "category": "vpn_network",
             "severity": "medium", "summary": "s", "affected_systems": [], "evidence": {},
         }, tool_use_id="t1"),
         make_text_message(text="I've recorded your issue."),

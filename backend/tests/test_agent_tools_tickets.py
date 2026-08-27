@@ -42,10 +42,13 @@ async def test_record_task_handler_creates_task(db_session):
     conv = _make_conversation(db_session)
     run_id = _make_run(db_session)
     args = RecordTaskArgs(
-        conversation_id=str(conv.id), title="VPN broken", category="vpn_network",
+        title="VPN broken", category="vpn_network",
         severity="medium", summary="Can't connect", affected_systems=["vpn"], evidence={},
     )
-    result = await record_task_handler(_guest_principal(conv.guest_email), db_session, args, run_id=run_id, guest_email=conv.guest_email)
+    result = await record_task_handler(
+        _guest_principal(conv.guest_email), db_session, args,
+        conversation_id=conv.id, run_id=run_id, guest_email=conv.guest_email,
+    )
     assert "task_id" in result
 
 
@@ -53,10 +56,13 @@ async def test_create_ticket_handler_and_list_my_tickets_round_trip(db_session):
     conv = _make_conversation(db_session)
     run_id = _make_run(db_session)
     record_args = RecordTaskArgs(
-        conversation_id=str(conv.id), title="VPN broken", category="vpn_network",
+        title="VPN broken", category="vpn_network",
         severity="medium", summary="Can't connect", affected_systems=[], evidence={},
     )
-    task_result = await record_task_handler(_guest_principal(conv.guest_email), db_session, record_args, run_id=run_id, guest_email=conv.guest_email)
+    task_result = await record_task_handler(
+        _guest_principal(conv.guest_email), db_session, record_args,
+        conversation_id=conv.id, run_id=run_id, guest_email=conv.guest_email,
+    )
 
     create_args = CreateTicketArgs(
         task_id=task_result["task_id"], assignee_helpdesk_ref="HD-001", priority="medium",
@@ -76,10 +82,13 @@ async def test_get_ticket_handler_denies_access_to_other_guests_ticket(db_sessio
     conv = _make_conversation(db_session, guest_email="owner@example.com")
     run_id = _make_run(db_session)
     record_args = RecordTaskArgs(
-        conversation_id=str(conv.id), title="t", category="other", severity="low",
+        title="t", category="other", severity="low",
         summary="s", affected_systems=[], evidence={},
     )
-    task_result = await record_task_handler(_guest_principal(conv.guest_email), db_session, record_args, run_id=run_id, guest_email=conv.guest_email)
+    task_result = await record_task_handler(
+        _guest_principal(conv.guest_email), db_session, record_args,
+        conversation_id=conv.id, run_id=run_id, guest_email=conv.guest_email,
+    )
     create_args = CreateTicketArgs(
         task_id=task_result["task_id"], assignee_helpdesk_ref="HD-001", priority="low",
         title="t", body="b", assignment_rationale="r", matched_specialization="s", assignment_score=0.5,

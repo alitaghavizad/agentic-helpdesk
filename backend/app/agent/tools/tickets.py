@@ -5,17 +5,16 @@ import uuid
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app.db.models import Ticket, TicketStatus
+from app.db.models import TaskCategory, Severity, Ticket, TicketStatus
 from app.rbac.policy import Principal
 from app.tickets.scoping import can_read_ticket, scope_tickets_query
 from app.tickets.service import create_ticket, record_task
 
 
 class RecordTaskArgs(BaseModel):
-    conversation_id: str
     title: str
-    category: str
-    severity: str
+    category: TaskCategory
+    severity: Severity
     summary: str
     affected_systems: list[str]
     evidence: dict = {}
@@ -41,11 +40,12 @@ class GetTicketArgs(BaseModel):
 
 
 async def record_task_handler(
-    principal: Principal, db: Session, args: RecordTaskArgs, *, run_id: uuid.UUID, guest_email: str | None = None,
+    principal: Principal, db: Session, args: RecordTaskArgs, *,
+    conversation_id: uuid.UUID, run_id: uuid.UUID, guest_email: str | None = None,
 ) -> dict:
     task = record_task(
         db,
-        conversation_id=uuid.UUID(args.conversation_id),
+        conversation_id=conversation_id,
         user_id=uuid.UUID(principal.user_id) if principal.kind == "user" else None,
         guest_email=guest_email if principal.kind == "guest" else None,
         title=args.title, category=args.category, severity=args.severity, summary=args.summary,

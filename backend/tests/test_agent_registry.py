@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import uuid
 
 import pytest
 
@@ -235,37 +236,33 @@ async def test_dispatch_tool_converts_handler_exception_to_is_error(db_session, 
 
 
 async def test_dispatch_tool_rolls_back_session_after_a_real_db_flush_failure(db_session):
-    """record_task's severity arg is an unconstrained str (RecordTaskArgs),
-    so a model can send a value Postgres's native enum column rejects --
-    that only fails at db.commit(), not at Pydantic validation. Without an
-    explicit db.rollback() in dispatch_tool's except branch, SQLAlchemy
-    leaves the session "inactive" after the failed flush, and the *next*
-    operation on the same session (e.g. saving the assistant's reply later
-    in the same chat turn) raises PendingRollbackError instead of
-    proceeding -- silently breaking the rest of the turn. Proves the
-    session is still usable immediately after the is_error return."""
-    from app.db.models import Run, RunStatus, RunTrigger
-
+    """record_task's category/severity args are now constrained to
+    TaskCategory/Severity enums (RecordTaskArgs), so a bad value there is
+    now caught at Pydantic validation, before any handler runs -- that hole
+    is closed. But conversation_id/run_id are still plain extra_context
+    kwargs (spec: the model must never supply conversation_id itself, so
+    it's server-injected, unmediated by Pydantic), so a caller providing a
+    run_id that doesn't correspond to a real Run row still only fails at
+    db.commit()'s FK check, not at argument validation. Without an explicit
+    db.rollback() in dispatch_tool's except branch, SQLAlchemy leaves the
+    session "inactive" after the failed flush, and the *next* operation on
+    the same session (e.g. saving the assistant's reply later in the same
+    chat turn) raises PendingRollbackError instead of proceeding -- silently
+    breaking the rest of the turn. Proves the session is still usable
+    immediately after the is_error return."""
     conv = Conversation(guest_name="Guest", guest_email="g@example.com")
     db_session.add(conv)
-    # Run created directly via db_session (not tracing.start_run()) so its
-    # id is visible to record_task's FK check within the same transaction --
-    # see the cross-connection FK-visibility gotcha noted throughout this
-    # phase's other test files (db_session's savepoint isn't visible to
-    # tracing's independently-committing session under READ COMMITTED).
-    run = Run(trigger=RunTrigger.CHAT_TURN, status=RunStatus.OK)
-    db_session.add(run)
     db_session.commit()
     db_session.refresh(conv)
-    db_session.refresh(run)
 
     raw_input = json.dumps({
-        "conversation_id": str(conv.id), "title": "Broken VPN", "category": "vpn_network",
-        "severity": "not-a-real-severity", "summary": "s", "affected_systems": [],
+        "title": "Broken VPN", "category": "vpn_network",
+        "severity": "medium", "summary": "s", "affected_systems": [],
     })
     result = await dispatch_tool(
         _GUEST, db=db_session, tool_name="record_task", tool_use_id="t1",
-        raw_input=raw_input, extra_context={"run_id": run.id, "guest_email": conv.guest_email},
+        raw_input=raw_input,
+        extra_context={"conversation_id": conv.id, "run_id": uuid.uuid4(), "guest_email": conv.guest_email},
     )
     assert result["is_error"] is True
 
@@ -273,6 +270,76 @@ async def test_dispatch_tool_rolls_back_session_after_a_real_db_flush_failure(db
     # session raises PendingRollbackError instead of succeeding.
     db_session.add(Conversation(guest_name="Still Works", guest_email="still-works@example.com"))
     db_session.commit()
+
+
+async def test_record_task_ignores_a_model_supplied_conversation_id_and_uses_server_context(db_session):
+    """Root-cause regression for the live-API gate failure this task fixes:
+    the model invented conversation_id="conv-emp5b1-vpn" (not a UUID, and
+    not even the real conversation) because RecordTaskArgs used to declare
+    conversation_id as a model-supplied field, and record_task_handler
+    called uuid.UUID(args.conversation_id) on it unguarded -- six retries,
+    all `ValueError: badly formed hexadecimal UUID string`, no Task and no
+    ticket ever written (spec 18's gate).
+
+    conversation_id is now exclusively a keyword-only parameter on
+    record_task_handler, sourced from dispatch_tool's extra_context (the
+    same server-injected mechanism create_ticket_handler already used) --
+    never a Pydantic field the model can populate. This test replays the
+    exact fabricated string from the incident inside the raw tool-call
+    JSON and proves it has no effect at all: Pydantic silently drops the
+    unknown key, and the resulting Task is attached to the real,
+    server-supplied conversation.
+
+    Against the pre-fix code (conversation_id required on RecordTaskArgs,
+    uuid.UUID(args.conversation_id) in the handler), this exact raw_input
+    fails every time with is_error=True / "badly formed hexadecimal UUID
+    string" and never reaches db.commit() -- so this test would fail
+    (result["is_error"] would be True, task would be None) against that
+    code.
+    """
+    from app.db.models import Run, RunStatus, RunTrigger, Task
+
+    conv = Conversation(guest_name="Guest", guest_email="g@example.com")
+    other_conv = Conversation(guest_name="Other", guest_email="other@example.com")
+    db_session.add_all([conv, other_conv])
+    # The Run backing classified_by_run_id is created through db_session, NOT
+    # tracing.start_run(). start_run() commits the Run on its own connection,
+    # and the Task that record_task inserts through db_session then holds an
+    # FK share lock on that row -- so cleanup_run's separate-connection
+    # DELETE FROM runs blocks on db_session's still-open transaction and
+    # deadlocks until one side is killed. (This is not hypothetical: an
+    # earlier draft of this test hung a suite run for nine hours.) Creating
+    # the Run here keeps it in the same transaction as the Task, so both roll
+    # back together and no cleanup_run is needed. The span machinery still
+    # has an active run -- this module's autouse _traced_run fixture supplies
+    # it -- and that run is never FK-referenced by anything here.
+    run = Run(trigger=RunTrigger.CHAT_TURN, status=RunStatus.OK)
+    db_session.add(run)
+    db_session.commit()
+    db_session.refresh(conv)
+    db_session.refresh(other_conv)
+    db_session.refresh(run)
+
+    raw_input = json.dumps({
+        # the literal fabricated, non-UUID id from the live-API incident --
+        # also deliberately not other_conv's real id either, to prove a
+        # model can't hijack another conversation's id even when it happens
+        # to supply a well-formed one.
+        "conversation_id": "conv-emp5b1-vpn",
+        "title": "VPN client times out", "category": "vpn_network",
+        "severity": "medium", "summary": "s", "affected_systems": [],
+    })
+    result = await dispatch_tool(
+        _GUEST, db=db_session, tool_name="record_task", tool_use_id="t1",
+        raw_input=raw_input,
+        extra_context={"conversation_id": conv.id, "run_id": run.id, "guest_email": conv.guest_email},
+    )
+
+    assert result.get("is_error") is not True, result
+    task = db_session.get(Task, uuid.UUID(result["task_id"]))
+    assert task is not None
+    assert task.conversation_id == conv.id
+    assert task.conversation_id != other_conv.id
 
 
 async def test_dispatch_tool_failed_handler_span_records_error_status(db_session, monkeypatch, cleanup_run):

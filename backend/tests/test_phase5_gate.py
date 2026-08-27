@@ -191,7 +191,6 @@ async def test_a_scripted_conversation_yields_a_task_row_and_a_ticket(db_session
     # The scripted turn: classify -> file a ticket -> answer.
     client = FakeAnthropicClient([
         make_tool_use_message(tool_name="record_task", tool_use_id="tu1", tool_input={
-            "conversation_id": str(conversation_id),
             "title": "VPN client times out",
             "category": TaskCategory.VPN_NETWORK.value,
             "severity": "medium",
