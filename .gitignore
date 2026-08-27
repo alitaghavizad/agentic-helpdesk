@@ -11,3 +11,4 @@ build/
 storage/uploads/
 .worktrees/
 .claude/worktrees/
+.superpowers/
