@@ -341,6 +341,16 @@ def test_two_concurrent_decisions_execute_the_action_exactly_once(monkeypatch):
     while the second decision is started. With SELECT ... FOR UPDATE the
     loser blocks BEFORE it reads, so it sees the winner's committed
     `executed` and raises NotPending. Without it, the loser sends again.
+
+    Each thread calls `get()` on its own session before `decide()`, exactly
+    as app/admin/router.py's `decide_approval` does (it checks existence via
+    `get()`, then calls `decide()` on that same `db`). That first read is
+    what populates the session's identity map -- without it, `decide()`'s
+    query is this session's first sight of the row and there is no stale
+    instance for `_load_for_decision`'s `populate_existing()` to matter for.
+    Skip this step and the test would still pass with `populate_existing()`
+    deleted, verifying nothing about the one line that actually closes the
+    hole.
     """
     import threading
     import time
@@ -388,6 +398,29 @@ def test_two_concurrent_decisions_execute_the_action_exactly_once(monkeypatch):
     def _decide() -> None:
         with Session() as session:
             try:
+                # Load the row into THIS session's identity map before
+                # deciding, mirroring app/admin/router.py's
+                # get()-then-decide() on one `db`. This is what makes
+                # `_load_for_decision`'s `populate_existing()` load-bearing
+                # for this test: without it, `decide()`'s locked SELECT
+                # would be the session's first read of the row, so even a
+                # stale, unrefreshed identity-map instance couldn't be
+                # returned -- there wouldn't be one yet. Do not remove this
+                # call; it looks redundant with `decide()`'s own query but
+                # is the entire point of the test.
+                #
+                # The reference is kept (not just checked and discarded like
+                # the router's `if approvals.get(...) is None:`), because
+                # the Session identity map holds only a WEAK reference to
+                # each loaded instance: a discarded result is eligible for
+                # garbage collection immediately, which silently drops it
+                # from the identity map before `decide()` runs and makes the
+                # whole scenario this test exists for disappear depending on
+                # GC timing -- exactly the kind of flakiness that would make
+                # this test worthless as a guard. Holding `loaded` for the
+                # rest of this function's scope keeps the instance (and so
+                # the stale-read hazard) alive deterministically.
+                loaded = approvals_service.get(session, approval_id)  # noqa: F841 -- kept alive, see comment above
                 decided = approvals_service.decide(session, principal, approval_id, approve=True, note="")
                 outcome = ("decided", decided.status.value)
             except approvals_service.NotPending:
