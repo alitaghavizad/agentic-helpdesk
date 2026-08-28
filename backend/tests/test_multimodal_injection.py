@@ -115,6 +115,50 @@ def test_an_attachment_is_injected_exactly_once(client, db_session, storage, mon
     assert service.pending_for_conversation(db_session, conversation_uuid) == []
 
 
+def test_message_persistence_and_attachment_binding_commit_together(
+    client, db_session, storage, monkeypatch,
+):
+    """Finding 2 (review): stage_message + bind_to_message must land in one
+    transaction. If binding fails, the endpoint never reaches db.commit(),
+    so rolling back the still-open session must erase BOTH the staged
+    message and the attempted bind -- proving there is no window where the
+    message has been persisted (and its attachment content delivered) while
+    the attachment itself is still marked pending, which would otherwise get
+    it injected a second time on the next turn."""
+    monkeypatch.setattr(gemini, "is_configured", lambda: True)
+    monkeypatch.setattr(gemini, "parse", _parses("Disk is full."))
+
+    _user, headers = _login(client, db_session, username="mminj4", role=Role.EMPLOYEE)
+    conv = client.post("/api/conversations", json={"title": "t"}, headers=headers).json()
+    _upload(client, headers, conv["id"])
+
+    from app.multimodal import service as attachments
+
+    def _boom(db, attachments_, message_id):
+        raise RuntimeError("simulated binding failure")
+
+    monkeypatch.setattr(attachments, "bind_to_message", _boom)
+
+    with pytest.raises(RuntimeError):
+        client.post(
+            f"/api/conversations/{conv['id']}/messages",
+            json={"content": "hello"}, headers=headers,
+        )
+
+    # No commit happened on this path -- the exception fired inside
+    # bind_to_message, before send_message_endpoint's db.commit() call --
+    # so rolling back the still-open transaction must erase everything
+    # staged. If the message had somehow been committed separately from the
+    # bind, it would survive this rollback and the count below would be 1.
+    db_session.rollback()
+
+    from app.db.models import Message
+
+    conversation_uuid = uuid.UUID(conv["id"])
+    assert db_session.query(Message).filter(Message.conversation_id == conversation_uuid).count() == 0
+    assert len(service.pending_for_conversation(db_session, conversation_uuid)) == 1
+
+
 def _attachment_blocks(db_session, conversation_id):
     """Mirrors what chat/router.py builds for a turn."""
     from app.chat.router import build_attachment_blocks

@@ -10,7 +10,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.agent.loop import run_turn
-from app.chat.service import append_message, create_conversation, get_conversation, list_conversations, load_history
+from app.chat.service import append_message, create_conversation, get_conversation, list_conversations, load_history, stage_message
 from app.config import get_settings
 from app.db.models import MessageRole
 from app.deps import CurrentPrincipal, DbSession
@@ -112,15 +112,23 @@ async def send_message_endpoint(conversation_id: uuid.UUID, payload: SendMessage
     history = load_history(db, conversation_id)
     attachment_blocks, pending_attachments = build_attachment_blocks(db, conversation_id)
     user_content = attachment_blocks + [{"type": "text", "text": payload.content}]
-    user_message_row = append_message(db, conversation_id, MessageRole.USER, user_content)
+    # stage_message (not append_message) so the write below is uncommitted --
+    # binding must land in the SAME transaction as the message. Committing the
+    # message first would leave a window where its content has already been
+    # delivered but the attachments are still marked pending, so the next
+    # turn would inject them a second time. Staging both and committing once
+    # closes that window: either the message and the bind land together, or
+    # neither does.
+    user_message_row = stage_message(db, conversation_id, MessageRole.USER, user_content)
     if pending_attachments:
-        # Bind AFTER the message exists, so an attachment is never orphaned
-        # against a message that failed to persist -- and so it can never be
-        # injected into a second turn.
+        # Bind AFTER the message exists (still pre-commit), so an attachment
+        # is never orphaned against a message that failed to persist -- and
+        # so it can never be injected into a second turn.
         from app.multimodal import service as attachments
 
         attachments.bind_to_message(db, pending_attachments, user_message_row.id)
-        db.commit()
+    # One commit for both the message and the binding.
+    db.commit()
     user_key = principal.user_id if principal.kind == "user" else (conv.guest_email or str(conversation_id))
 
     async def event_stream():
