@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 
 import anthropic
@@ -13,6 +14,8 @@ from app.chat.service import append_message, create_conversation, get_conversati
 from app.config import get_settings
 from app.db.models import MessageRole
 from app.deps import CurrentPrincipal, DbSession
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/conversations", tags=["chat"])
 
@@ -48,6 +51,39 @@ def _serialize(conv) -> ConversationResponse:
     return ConversationResponse(id=str(conv.id), title=conv.title, status=conv.status.value)
 
 
+def build_attachment_blocks(db, conversation_id: uuid.UUID):
+    """Returns (blocks, attachments) for the attachments waiting on this
+    conversation. Wrapping happens here rather than in the multimodal package
+    because this is the point where content crosses into the model's view --
+    the same place RAG results are wrapped (spec 12.1).
+
+    Each block is a separate content block rather than being concatenated into
+    the user's text, so the boundary between what the user typed and what a
+    file said stays explicit in the transcript."""
+    from app.agent.guardrails import scan_for_injection, wrap_untrusted
+    from app.multimodal import service as attachments
+
+    pending = attachments.pending_for_conversation(db, conversation_id)
+    blocks = []
+    for attachment in pending:
+        flags = scan_for_injection(attachment.parsed_text or "")
+        if flags:
+            # Recorded, not removed. Spec 12.1 is explicit that flagged
+            # content still reaches the model with its flag, so the model can
+            # report the attempt instead of being silently shielded from it.
+            logger.warning(
+                "injection markers in attachment %s: %s", attachment.id, ", ".join(flags),
+            )
+        blocks.append({
+            "type": "text",
+            "text": wrap_untrusted(
+                source=f"attachment/{attachment.filename}",
+                content=attachment.parsed_text or "",
+            ),
+        })
+    return blocks, pending
+
+
 @router.post("", response_model=ConversationResponse)
 def create_conversation_endpoint(payload: CreateConversationRequest, principal: CurrentPrincipal, db: DbSession) -> ConversationResponse:
     conv = create_conversation(db, principal, title=payload.title, guest_name=principal.guest_name, guest_email=principal.guest_email)
@@ -74,7 +110,17 @@ async def send_message_endpoint(conversation_id: uuid.UUID, payload: SendMessage
         raise HTTPException(status.HTTP_404_NOT_FOUND, "no such conversation")
 
     history = load_history(db, conversation_id)
-    append_message(db, conversation_id, MessageRole.USER, [{"type": "text", "text": payload.content}])
+    attachment_blocks, pending_attachments = build_attachment_blocks(db, conversation_id)
+    user_content = attachment_blocks + [{"type": "text", "text": payload.content}]
+    user_message_row = append_message(db, conversation_id, MessageRole.USER, user_content)
+    if pending_attachments:
+        # Bind AFTER the message exists, so an attachment is never orphaned
+        # against a message that failed to persist -- and so it can never be
+        # injected into a second turn.
+        from app.multimodal import service as attachments
+
+        attachments.bind_to_message(db, pending_attachments, user_message_row.id)
+        db.commit()
     user_key = principal.user_id if principal.kind == "user" else (conv.guest_email or str(conversation_id))
 
     async def event_stream():
@@ -83,6 +129,7 @@ async def send_message_endpoint(conversation_id: uuid.UUID, payload: SendMessage
         async for event in run_turn(
             _get_client(), db, principal, conversation_id=conversation_id,
             user_key=user_key, history=history, user_message=payload.content,
+            attachment_blocks=attachment_blocks,
         ):
             if event.type == "token":
                 assistant_content.append({"type": "text", "text": event.data["text"]})

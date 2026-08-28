@@ -59,6 +59,7 @@ async def run_turn(
     user_key: str,
     history: list[dict],
     user_message: str,
+    attachment_blocks: list[dict] | None = None,
 ) -> AsyncIterator[TurnEvent]:
     """The main iteration loop (spec 8.5). `client` is any object exposing
     `.beta.messages.stream(...)` the way anthropic.AsyncAnthropic does --
@@ -71,7 +72,13 @@ async def run_turn(
 
     handle = start_run(RunTrigger.CHAT_TURN, conversation_id=conversation_id, user_id=uuid.UUID(principal.user_id) if principal.kind == "user" else None)
     budget = new_turn_budget()
-    messages = list(history) + [{"role": "user", "content": user_message}]
+    # Attachment content is prepended as SEPARATE blocks rather than being
+    # concatenated into the user's text, so the boundary between what the
+    # person typed and what a file said stays explicit. `user_message` stays
+    # the plain string because check_inbound scans what the USER wrote --
+    # attachment content is scanned separately in build_attachment_blocks.
+    user_content = (attachment_blocks or []) + [{"type": "text", "text": user_message}]
+    messages = list(history) + [{"role": "user", "content": user_content}]
     system_prompt = build_system_prompt(principal)
     tools = to_anthropic_tool_params()
     aborted_reason: str | None = None
