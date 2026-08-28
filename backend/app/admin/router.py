@@ -75,10 +75,16 @@ def list_approvals(principal: AdminPrincipal, db: DbSession, status: str | None 
 def decide_approval(
     request_id: uuid.UUID, payload: DecideRequest, principal: AdminPrincipal, db: DbSession,
 ) -> ApprovalResponse:
+    # Check existence explicitly instead of catching LookupError around
+    # decide(): KeyError and IndexError are both LookupError subclasses, so
+    # `except LookupError` here would also swallow an unrelated bug inside
+    # decide() -- e.g. a bad dict/list lookup somewhere in the executor --
+    # and misreport it as 404 "no such approval request" instead of letting
+    # it surface as a 500 that gets noticed and fixed.
+    if approvals.get(db, request_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "no such approval request")
     try:
         decided = approvals.decide(db, principal, request_id, approve=payload.approve, note=payload.note)
-    except LookupError:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "no such approval request")
     except approvals.NotPending as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc))
     return _serialize(decided)

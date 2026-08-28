@@ -167,3 +167,30 @@ def test_deciding_an_unknown_request_is_404(client, db_session):
         headers=admin_headers,
     )
     assert response.status_code == 404
+
+
+def test_an_unrelated_internal_error_does_not_become_a_404(client, db_session, pending, monkeypatch):
+    """Regression test for the router's former `except LookupError` around
+    decide(): KeyError and IndexError are both LookupError subclasses, so
+    that broad catch would have reported this exact scenario -- a real bug
+    inside decide(), on a request that DOES exist -- as 404 "no such
+    approval request", indistinguishable from test_deciding_an_unknown_
+    request_is_404 above. The router now checks existence explicitly before
+    calling decide(), so decide()'s own errors propagate instead of being
+    misreported. TestClient's default raise_server_exceptions=True means an
+    unhandled exception surfaces here as a raised Python exception rather
+    than a response object."""
+    from app.approvals import service as approvals_service
+
+    def _boom(*args, **kwargs):
+        raise KeyError("simulated bug inside decide(), unrelated to 'not found'")
+
+    monkeypatch.setattr(approvals_service, "decide", _boom)
+    _, admin_headers = _login(client, db_session, username="approvals-admin6", role=Role.ADMIN)
+
+    with pytest.raises(KeyError):
+        client.post(
+            f"/api/admin/approvals/{pending.id}/decide",
+            json={"approve": True, "note": ""},
+            headers=admin_headers,
+        )
