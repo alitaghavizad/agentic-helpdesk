@@ -30,11 +30,12 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "--basetemp=.pytest_tmp -m \"not live_api and not live_smtp\""
+addopts = "--basetemp=.pytest_tmp -m \"not live_api and not live_smtp and not live_gemini\""
 asyncio_mode = "auto"
 markers = [
     "live_api: hits the real Anthropic API and costs real money -- excluded from the default run",
     "live_smtp: sends one real email through the configured SMTP server -- excluded from the default run",
+    "live_gemini: hits the real Gemini API and costs real money -- excluded from the default run",
 ]
 
 [build-system]

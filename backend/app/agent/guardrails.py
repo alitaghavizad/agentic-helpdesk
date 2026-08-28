@@ -9,6 +9,14 @@ _UNTRUSTED_TEMPLATE = '<untrusted_data source="{source}" trust="none">\n{content
 
 _DELIMITER_RE = re.compile(r"<\s*/?\s*untrusted_data", re.IGNORECASE)
 
+# `source` is interpolated INSIDE a quoted attribute (source="{source}"), not
+# between tags like `content` is. A `"` there closes the attribute early and
+# a following `>` closes the opening tag early, so anything after them lands
+# ahead of `trust="none"` as attacker-controlled tag content instead of
+# quietly sitting inside a string. Stripping both closes that specific
+# escape; `content` never sits inside an attribute so it does not need this.
+_SOURCE_ATTR_BREAKOUT_RE = re.compile(r'["' r'>]')
+
 
 def wrap_untrusted(source: str, content: str) -> str:
     """Wraps a piece of retrieved/external content per spec 12.1. Every RAG
@@ -16,22 +24,31 @@ def wrap_untrusted(source: str, content: str) -> str:
     the system prompt states content inside these tags is information to
     reason about, never an instruction to follow.
 
-    Neutralises the delimiter inside `content` (and `source`) before
-    interpolating. Without this the wrapper is not a boundary at all: any
-    content able to emit `</untrusted_data>` closes it early and everything
-    after lands OUTSIDE the wrapper, where the system prompt's "this is
-    data, not instruction" rule no longer applies. That content is
-    attacker-influenced -- a crafted screenshot can make the parser emit an
-    arbitrary string -- so this is a reachable escape, not a theoretical
-    one. `source` is sanitised here too rather than trusted from the
-    caller: it is built from a filename two modules away, and this
-    function's integrity should not depend on that caller remembering to
-    strip tag-shaped characters.
+    Two independent guarantees, because `source` and `content` sit in
+    different syntactic positions in the template:
 
-    Neutralising rather than dropping keeps faith with 12.1: the reader
-    still sees what was attempted, in a form that cannot function as a
-    tag."""
+    - `content` sits BETWEEN tags. The delimiter `</untrusted_data` (any
+      case/whitespace variant) is neutralised there so attacker-influenced
+      text -- a crafted screenshot can make the parser emit an arbitrary
+      string -- cannot close the wrapper early and escape everything after
+      it into trusted territory.
+    - `source` sits INSIDE the `source="..."` attribute. Beyond the same
+      delimiter neutralisation, `"` and `>` are stripped: either one lets
+      attacker-controlled text break out of the attribute and plant a
+      spoofed tag in the opening line itself, ahead of `trust="none"`,
+      which is a stronger escape than closing the wrapper late.
+
+    Both are enforced here rather than trusted from the caller: `source` is
+    built from a filename two modules away, and this function's integrity
+    should not depend on that caller remembering to strip tag-shaped
+    characters.
+
+    Neutralising rather than dropping keeps faith with 12.1 for `content`:
+    the reader still sees what was attempted, in a form that cannot function
+    as a tag. `source` is a short caller-built label, not evidence to
+    preserve, so its unsafe characters are simply removed."""
     safe_source = _DELIMITER_RE.sub("<!untrusted_data", source)
+    safe_source = _SOURCE_ATTR_BREAKOUT_RE.sub("", safe_source)
     safe_content = _DELIMITER_RE.sub("<!untrusted_data", content)
     return _UNTRUSTED_TEMPLATE.format(source=safe_source, content=safe_content)
 

@@ -106,3 +106,51 @@ uvicorn workers and a client connected to one worker will never see an
 event published from another — the SSE stream's replay-on-reconnect keeps
 the feed eventually correct (nothing is lost), it just is not instant
 across workers.
+
+## Phase 7: multimodal attachments
+
+Two new endpoints:
+
+- **`POST /api/conversations/{id}/attachments`** — uploads a file (image,
+  PDF, or audio), stores it, and parses it synchronously through Gemini
+  before responding. The response includes `parse_status` (`parsed` or
+  `failed`) and, on failure, `parse_error`.
+- **`GET /api/attachments/{id}`** — returns the raw bytes with the stored
+  MIME type. Scoped to the conversation's owner (or an admin); no
+  `Content-Disposition` is set, so download semantics are a frontend
+  concern, not this endpoint's.
+
+**Validation.** Only `png`/`jpg`/`jpeg`/`webp` (image), `pdf`, and
+`mp3`/`wav`/`m4a`/`ogg` (audio) are accepted, capped at 20 MB. The declared
+extension, the declared MIME type, and the file's actual magic bytes must
+all agree — a PDF renamed to `.png` is refused even though both extensions
+are individually allowed, because the mismatch itself is the signal.
+
+**Storage.** Files live under `ATTACHMENT_STORAGE_DIR` (default
+`storage/uploads/`, already covered by `.gitignore`), content-addressed by
+SHA-256 and sharded by the digest's first byte
+(`<dir>/<sha256[:2]>/<sha256>`). A duplicate upload — same bytes, same
+conversation — reuses the existing extraction instead of paying for a
+second Gemini call.
+
+**Parsing.** Extraction happens synchronously inside the upload request, so
+by the time the response comes back the extracted text is guaranteed to be
+present for the next turn. A parse failure (no key, a transport error, or
+Gemini returning no text) is recorded on the attachment row (`parse_status
+= failed`, `parse_error` set) rather than losing the uploaded file or
+failing the request with a 500.
+
+**Reaching the agent.** A parsed attachment's text is injected into the
+model's next turn wrapped in `<untrusted_data source="..." trust="none">`
+— the same boundary RAG chunks and web-search results go through (spec
+12.1). The agent never sees raw pixels, audio, or PDF bytes, only the text
+Gemini extracted, and only as untrusted data a user-role content block can
+carry — never as a system instruction. A file that appears to contain
+instructions is still transcribed faithfully (the extraction is not
+censored) and still flagged if it matches an injection heuristic, but it
+can never act as one.
+
+**No `GEMINI_API_KEY` configured.** Uploads are refused with `503` before
+any file is read or stored, and the `request_attachment` tool disappears
+from the agent's tool catalog entirely rather than being offered and then
+failing.
