@@ -106,6 +106,30 @@ def create_ticket(
     # (spec 5.3's resolution_path enum). Same transaction as the insert:
     # a task must never read `ticketed` without its ticket existing.
     task.resolution_path = ResolutionPath.TICKETED
+
+    # ticket_number is a server-side Identity() column -- still None on this
+    # freshly-added, unflushed object. The notification titles below read it,
+    # so it must be assigned before they're built, not left for the
+    # db.commit() at the end of this function.
+    db.flush()
+
+    # Spec 10's "ticket created for you" / "ticket assigned to you". Both are
+    # skipped for a guest requester -- notifications.user_id is NOT NULL and
+    # guests are not rows in `users` (spec 5.1); notify() returns None rather
+    # than raising, so no guard is needed here.
+    from app.db.models import NotificationType
+    from app.notifications import service as notifications
+
+    notifications.notify(
+        db, user_id=requester_user_id, type=NotificationType.TICKET_CREATED,
+        title=f"Ticket TCK-{ticket.ticket_number:06d} created",
+        body=title, link_type="ticket", link_id=ticket.id,
+    )
+    notifications.notify(
+        db, user_id=ticket.assignee_user_id, type=NotificationType.TICKET_ASSIGNED,
+        title=f"Ticket TCK-{ticket.ticket_number:06d} assigned to you",
+        body=assignment_rationale, link_type="ticket", link_id=ticket.id,
+    )
     db.commit()
     db.refresh(ticket)
     return ticket
@@ -161,6 +185,19 @@ def transition_status(db: Session, ticket: Ticket, new_status: TicketStatus | st
         ticket.resolved_at = None
         ticket.resolved_by_user_id = None
     ticket.status = target
+
+    from app.db.models import NotificationType, TicketStatus as _TS
+    from app.notifications import service as notifications
+
+    # resolve_ticket calls this function and then sends its own, more
+    # specific TICKET_RESOLVED notification. Emitting a status-changed one
+    # here as well would give the requester two notifications for one event.
+    if target is not _TS.RESOLVED:
+        notifications.notify(
+            db, user_id=ticket.requester_user_id, type=NotificationType.TICKET_STATUS_CHANGED,
+            title=f"Ticket TCK-{ticket.ticket_number:06d} is now {target.value}",
+            body=ticket.title, link_type="ticket", link_id=ticket.id,
+        )
     return ticket
 
 
@@ -181,6 +218,15 @@ def reassign(db: Session, ticket: Ticket, *, assignee_helpdesk_ref: str, rationa
     ticket.assignment_rationale = (
         f"{ticket.assignment_rationale}\nReassigned from {previous} to {assignee_helpdesk_ref}: {rationale}"
     )
+
+    from app.db.models import NotificationType
+    from app.notifications import service as notifications
+
+    notifications.notify(
+        db, user_id=ticket.assignee_user_id, type=NotificationType.TICKET_ASSIGNED,
+        title=f"Ticket TCK-{ticket.ticket_number:06d} assigned to you",
+        body=rationale, link_type="ticket", link_id=ticket.id,
+    )
     return ticket
 
 
@@ -197,4 +243,13 @@ def resolve_ticket(
     ticket.resolution = resolution.strip()
     ticket.resolved_by_user_id = resolved_by_user_id
     ticket.resolved_at = datetime.now(timezone.utc)
+
+    from app.db.models import NotificationType
+    from app.notifications import service as notifications
+
+    notifications.notify(
+        db, user_id=ticket.requester_user_id, type=NotificationType.TICKET_RESOLVED,
+        title=f"Ticket TCK-{ticket.ticket_number:06d} resolved",
+        body=ticket.resolution, link_type="ticket", link_id=ticket.id,
+    )
     return ticket

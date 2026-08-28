@@ -37,8 +37,23 @@ async def create_approval_request_handler(
     return {"request_number": f"REQ-{request.request_number:06d}", "status": request.status.value}
 
 
-async def request_attachment_handler(principal: Principal, db: Session, args: RequestAttachmentArgs) -> dict:
-    """Emits a structured signal for the SSE layer (Task 12) to turn into an
-    `attachment_request` event; does not block the turn or touch the
-    database (spec section 8.3)."""
+async def request_attachment_handler(
+    principal: Principal, db: Session, args: RequestAttachmentArgs, *, conversation_id: uuid.UUID | None = None,
+) -> dict:
+    """Emits a structured signal for the SSE layer to turn into an
+    `attachment_request` event, and -- for a signed-in user -- a durable
+    notification so the request survives the user closing the tab. Still
+    does not block the turn (spec 8.3)."""
+    from app.db.models import NotificationType
+    from app.notifications import service as notifications
+
+    notifications.notify(
+        db,
+        user_id=uuid.UUID(principal.user_id) if principal.kind == "user" and principal.user_id else None,
+        type=NotificationType.ATTACHMENT_REQUESTED,
+        title=f"The assistant asked for a {args.kind}",
+        body=args.reason,
+        link_type="conversation",
+        link_id=conversation_id,
+    )
     return {"attachment_requested": True, "kind": args.kind, "reason": args.reason}
