@@ -108,11 +108,16 @@ def parse(data: bytes, *, mime_type: str, kind: AttachmentKind) -> ParseResult:
 def _traced_parse(data: bytes, *, mime_type: str, kind: AttachmentKind) -> ParseResult:
     from google.genai import types
 
-    client = _get_client()
-    _check_model_once(client)
     model = get_settings().gemini_model
 
     try:
+        # Client construction lives inside this try too: if it ever raises
+        # (a malformed key, a broken transport dependency), that must still
+        # come out as GeminiUnavailable rather than escaping raw -- the
+        # class's whole contract is that it never reaches the uploader as a
+        # 500.
+        client = _get_client()
+        _check_model_once(client)
         response = client.models.generate_content(
             model=model,
             contents=[types.Part.from_bytes(data=data, mime_type=mime_type), PROMPTS[kind]],

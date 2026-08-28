@@ -17,6 +17,11 @@ class Settings(BaseSettings):
     gemini_api_key: str = ""
     gemini_model: str = "gemini-2.5-flash"
 
+    # Default is already covered by .gitignore's `storage/uploads/`, so stored
+    # files can never become untracked working-tree noise. Tests point this at
+    # a temporary directory.
+    attachment_storage_dir: str = "storage/uploads"
+
     database_url: str = ""
     chroma_url: str = "http://localhost:8000"
     chroma_backend: str = "mcp"

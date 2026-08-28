@@ -103,6 +103,30 @@ def test_parse_without_a_key_raises_gemini_unavailable(monkeypatch):
         gemini.parse(b"fake", mime_type="image/png", kind=AttachmentKind.IMAGE)
 
 
+def test_a_client_construction_failure_surfaces_as_gemini_unavailable(monkeypatch, cleanup_run):
+    """`_get_client()` used to run outside `_traced_parse`'s try/except, so a
+    construction failure (a malformed key, a broken transport dependency)
+    would escape as whatever raw exception the client raised instead of
+    GeminiUnavailable -- contradicting that class's docstring promise that
+    a parse failure never reaches the uploader as a 500."""
+    from app.tracing.spans import end_run, start_run
+
+    monkeypatch.setattr(gemini, "is_configured", lambda: True)
+    monkeypatch.setattr(gemini, "_client", None)
+
+    def _boom():
+        raise RuntimeError("could not construct genai.Client")
+
+    monkeypatch.setattr(gemini, "_get_client", _boom)
+    handle = start_run(RunTrigger.CHAT_TURN)
+    try:
+        with pytest.raises(gemini.GeminiUnavailable):
+            gemini.parse(b"fake", mime_type="image/png", kind=AttachmentKind.IMAGE)
+    finally:
+        end_run(handle, status=RunStatus.ERROR)
+        cleanup_run(handle.run_id)
+
+
 def test_an_empty_response_is_an_error_not_silent_success(monkeypatch, cleanup_run):
     """A model that returns nothing has not parsed the file. Returning ''
     would store an empty parsed_text as though it succeeded."""
