@@ -5,7 +5,7 @@ import io
 import pytest
 
 from app.db.models import EscalationAuthority, Role, User
-from app.multimodal import gemini, service
+from app.multimodal import gemini, service, validation
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"deadbeef" * 4
 
@@ -118,6 +118,21 @@ def test_upload_is_503_when_gemini_is_not_configured(client, db_session, storage
     response = _upload(client, headers, conv["id"])
     assert response.status_code == 503
     assert "attachment" in response.json()["detail"].lower()
+
+
+def test_an_oversized_content_length_is_rejected_before_the_body_is_parsed(client, db_session, storage, parses_ok):
+    """The header alone is enough. No valid multipart body is sent here, so if
+    this returned anything other than 413 it would mean the body was parsed
+    first -- which is the bug."""
+    _user, headers = _login(client, db_session, username="mmbig", role=Role.EMPLOYEE)
+    conv = client.post("/api/conversations", json={"title": "t"}, headers=headers).json()
+
+    response = client.post(
+        f"/api/conversations/{conv['id']}/attachments",
+        headers={**headers, "content-length": str(validation.MAX_BYTES + 1)},
+        content=b"",
+    )
+    assert response.status_code == 413
 
 
 def test_request_attachment_is_absent_from_the_catalog_without_a_key(monkeypatch):

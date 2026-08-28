@@ -44,11 +44,14 @@ def _serialize(row: Attachment) -> AttachmentResponse:
 
 
 def _read_capped(upload: UploadFile) -> bytes:
-    """Reads chunk by chunk and stops the moment the cap is exceeded.
+    """Bounds what THIS function accumulates, as the second half of the cap.
 
-    Reading the whole body and checking the length afterwards would let a
-    client send a gigabyte before anything objected -- the check has to happen
-    while the bytes are arriving, not after."""
+    It cannot be the whole cap, and the docstring used to imply otherwise:
+    by the time this runs, FastAPI has already parsed the multipart body and
+    spooled the file. The Content-Length middleware in app/main.py is what
+    stops an oversized body from being received at all; this catches the cases
+    that middleware cannot see -- a chunked request with no Content-Length, or
+    one whose declared length was a lie."""
     buffer = bytearray()
     while True:
         chunk = upload.file.read(_CHUNK)
@@ -57,7 +60,7 @@ def _read_capped(upload: UploadFile) -> bytes:
         buffer.extend(chunk)
         if len(buffer) > validation.MAX_BYTES:
             raise HTTPException(
-                status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                status.HTTP_413_CONTENT_TOO_LARGE,
                 f"file exceeds the {validation.MAX_BYTES // (1024 * 1024)} MB limit",
             )
     return bytes(buffer)
