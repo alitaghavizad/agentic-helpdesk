@@ -46,7 +46,7 @@ _MIME_ALIASES: dict[str, str] = {
     "application/ogg": "ogg",
 }
 
-_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_SHA256_RE = re.compile(r"[0-9a-f]{64}")
 _FILENAME_SAFE = set(string.ascii_letters + string.digits + " ._-()[]")
 
 
@@ -77,10 +77,17 @@ def sniff(data: bytes) -> str | None:
         return "pdf"
     if data.startswith(b"ID3") or (len(data) >= 2 and data[0] == 0xFF and (data[1] & 0xE0) == 0xE0):
         return "mp3"
-    if data[4:8] == b"ftyp":
-        return "m4a"
     if data.startswith(b"OggS"):
         return "ogg"
+    # Checked last, and with a structural guard. An ftyp box is preceded by
+    # its own big-endian size, so requiring a plausible size stops arbitrary
+    # leading bytes from passing -- and running this after every
+    # prefix-anchored signature stops it shadowing them (bytes beginning
+    # "OggS" followed by "ftyp" are Ogg, not M4A).
+    if len(data) >= 12 and data[4:8] == b"ftyp":
+        box_size = int.from_bytes(data[0:4], "big")
+        if 8 <= box_size <= 1024:
+            return "m4a"
     return None
 
 
@@ -132,6 +139,9 @@ def storage_relpath(sha256: str) -> str:
     """Shards by the first byte so one directory never holds every upload.
     Refuses a non-digest outright: this builds a filesystem path, and the
     digest is the only thing keeping a separator out of it."""
-    if not _SHA256_RE.match(sha256):
+    # fullmatch is deliberate: with `match`, `$` matches at end-of-string OR
+    # immediately before a trailing newline, so `.match()` would let a
+    # digest-plus-newline through. `fullmatch` has no such exception.
+    if not _SHA256_RE.fullmatch(sha256):
         raise ValueError(f"not a sha256 hex digest: {sha256!r}")
     return f"{sha256[:2]}/{sha256}"

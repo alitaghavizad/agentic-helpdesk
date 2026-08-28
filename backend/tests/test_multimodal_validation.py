@@ -34,6 +34,18 @@ def test_sniff_returns_none_for_unrecognised_bytes():
     assert validation.sniff(b"not a real file at all") is None
 
 
+def test_arbitrary_bytes_containing_ftyp_are_not_accepted_as_m4a():
+    """The ftyp box is preceded by its own size. Without that anchor, any
+    payload with 'ftyp' at offset 4 passes as audio."""
+    assert validation.sniff(b"\x13\x37\xc0\xde" + b"ftypM4A " + b"\x00" * 32) is None
+
+
+def test_ogg_is_not_shadowed_by_the_m4a_check():
+    """Bytes starting with the real Ogg magic are Ogg, whatever sits at
+    offset 4."""
+    assert validation.sniff(b"OggS" + b"ftyp" + b"\x00" * 32) == "ogg"
+
+
 # ---- the allowlists ------------------------------------------------------
 
 def test_a_disallowed_extension_is_rejected():
@@ -115,6 +127,6 @@ def test_storage_relpath_rejects_anything_that_is_not_a_hex_digest():
     """The digest is computed by us, never supplied -- but this function
     builds a filesystem path, so it refuses to build one from input that
     could contain a separator."""
-    for bad in ("../etc/passwd", "a" * 63, "z" * 64, ""):
+    for bad in ("../etc/passwd", "a" * 63, "z" * 64, "", "a" * 64 + "\n", "A" * 64):
         with pytest.raises(ValueError):
             validation.storage_relpath(bad)
