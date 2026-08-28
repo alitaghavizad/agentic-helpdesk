@@ -86,12 +86,18 @@ retrieve a stored file is §7's authorized endpoint.
 ### 4.3 Duplicate uploads reuse the parse
 
 Identical bytes produce an identical `sha256` and therefore the same storage path.
-If an `attachments` row with that hash already exists in `parsed` status, the new
-row copies its `parsed_text` and `parse_model` instead of calling Gemini again.
+If an `attachments` row with that hash already exists in `parsed` status **within
+the same conversation**, the new row copies its `parsed_text` and `parse_model`
+instead of calling Gemini again.
 
 Each upload still gets its own row — the rows differ in conversation, uploader,
-and message binding. Only the extraction is shared, and identical bytes yield an
-identical extraction, so this discloses nothing between users.
+and message binding. The lookup is scoped to the conversation rather than global:
+a cache hit returns instantly where a fresh parse takes seconds, so a
+sha256-only match would let anyone holding a file's bytes learn — through that
+timing difference — whether some other conversation had ever uploaded the exact
+same file. Scoping to the conversation removes that cross-tenant channel while
+still catching the case that actually recurs, the same file sent twice in one
+conversation.
 
 ### 4.4 Rejected uploads create no row
 

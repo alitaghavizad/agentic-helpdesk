@@ -100,6 +100,43 @@ def test_identical_bytes_reuse_the_existing_parse(db_session, storage, conversat
     assert second.id != first.id
 
 
+def test_dedupe_does_not_span_conversations(db_session, storage, parses_ok):
+    """Existence must not leak across tenants through response timing."""
+    from app.db.models import Conversation
+
+    conversations = []
+    for _ in range(2):
+        conv = Conversation(guest_name="G", guest_email="g@northstar.example")
+        db_session.add(conv)
+        db_session.flush()
+        conversations.append(conv)
+
+    for conv in conversations:
+        service.store_and_parse(
+            db_session, conversation_id=conv.id, uploader_user_id=None,
+            filename="shot.png", declared_mime="image/png", data=PNG,
+        )
+    assert len(parses_ok) == 2, "a second conversation must parse for itself"
+
+
+def test_two_attachments_in_one_transaction_keep_their_upload_order(
+    db_session, storage, conversation, parses_ok,
+):
+    """Postgres now() is constant across a transaction, so relying on the
+    column default put the injection order at the mercy of random uuid4."""
+    first = service.store_and_parse(
+        db_session, conversation_id=conversation.id, uploader_user_id=None,
+        filename="one.png", declared_mime="image/png", data=PNG,
+    )
+    second = service.store_and_parse(
+        db_session, conversation_id=conversation.id, uploader_user_id=None,
+        filename="two.png", declared_mime="image/png", data=PNG + b"different",
+    )
+    assert first.created_at < second.created_at
+    pending = service.pending_for_conversation(db_session, conversation.id)
+    assert [a.filename for a in pending] == ["one.png", "two.png"]
+
+
 def test_parsed_text_is_redacted_before_persistence(db_session, storage, conversation, monkeypatch):
     """Spec 12.4: parsed_text goes through the same redaction path as spans."""
     def _leaky(data, *, mime_type, kind):

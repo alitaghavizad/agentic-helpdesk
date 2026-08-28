@@ -16,7 +16,9 @@ nothing -- the harmless direction to fail in.
 from __future__ import annotations
 
 import hashlib
+import os
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 from sqlalchemy.orm import Session
@@ -61,7 +63,13 @@ def store_and_parse(
     destination = storage_root() / relpath
     destination.parent.mkdir(parents=True, exist_ok=True)
     if not destination.exists():
-        destination.write_bytes(data)
+        # Write-then-rename rather than writing in place. Storage is
+        # content-addressed, so a truncated file from an interrupted write
+        # would be pinned forever: every later upload of those bytes sees the
+        # path exists and skips it. os.replace is atomic on Windows and POSIX.
+        temporary = destination.with_suffix(".partial")
+        temporary.write_bytes(data)
+        os.replace(temporary, destination)
 
     row = Attachment(
         conversation_id=conversation_id,
@@ -74,13 +82,25 @@ def store_and_parse(
         storage_path=relpath,
         kind=kind,
         parse_status=ParseStatus.PENDING,
+        # Set explicitly rather than left to the column's server_default.
+        # Postgres's now() is the TRANSACTION start time, so several
+        # attachments uploaded in one request would share a timestamp and the
+        # ordering below would fall through to a random uuid4 -- injecting a
+        # user's files into their turn in an arbitrary order.
+        created_at=datetime.now(timezone.utc),
     )
 
-    # Same bytes, same extraction. Paying for a second Gemini call to learn
-    # the same thing is pure waste, and nothing is disclosed between users
-    # because the content is byte-identical (spec 4.3).
+    # Scoped to THIS conversation, not global. Matching on sha256 alone would
+    # save a little more but leaks existence across tenants through timing: a
+    # cache hit returns instantly where a fresh parse takes seconds, so anyone
+    # holding a file's bytes could learn whether another user had ever
+    # uploaded it. A conversation has a single owner, so scoping here removes
+    # the cross-tenant channel entirely and still catches the case that
+    # actually recurs -- the same file sent twice in one conversation.
     previous = db.query(Attachment).filter(
-        Attachment.sha256 == sha256, Attachment.parse_status == ParseStatus.PARSED,
+        Attachment.conversation_id == conversation_id,
+        Attachment.sha256 == sha256,
+        Attachment.parse_status == ParseStatus.PARSED,
     ).first()
     if previous is not None:
         row.parsed_text = previous.parsed_text
