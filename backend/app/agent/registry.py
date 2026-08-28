@@ -103,6 +103,15 @@ def _pydantic_schema_to_strict(model: type[BaseModel]) -> dict:
 
 
 def to_anthropic_tool_params() -> list[ToolParam | dict]:
+    # Imported here, not at module scope: app.multimodal.gemini imports
+    # app.config, and a module-scope import would make importing the
+    # registry require configuration.
+    from app.multimodal import gemini
+
+    # Spec 11: with no Gemini key the system cannot accept an attachment, so
+    # the agent must not be able to ask for one. Same filter shape already
+    # used for web_search below.
+    attachments_available = gemini.is_configured()
     params: list[ToolParam | dict] = [
         ToolParam(
             name=spec.name, description=spec.description,
@@ -111,6 +120,7 @@ def to_anthropic_tool_params() -> list[ToolParam | dict]:
         )
         for spec in TOOLS
         if spec.name != "web_search"  # serialized as the real server-tool dict below instead
+        and (spec.name != "request_attachment" or attachments_available)
     ]
     # Server tool -- no handler, no input_model, declared directly as a
     # dict (spec D3 / 8.3). allowed_callers pinned to "direct" so this
