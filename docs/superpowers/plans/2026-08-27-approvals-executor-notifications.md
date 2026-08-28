@@ -293,9 +293,10 @@ git commit -m "Enforce the no-email-without-approval invariant in the database"
 - Consumes: nothing. This module has no database dependency and imports nothing from `app.db`.
 - Produces:
   - `broker.publish(user_id: uuid.UUID, event: dict) -> None`
-  - `broker.subscribe(user_id: uuid.UUID) -> Subscription` (context manager yielding an object with `async def __anext__`)
+  - `broker.subscribe(user_id: uuid.UUID) -> Subscription` — a SYNC context manager yielding an object consumed with `await sub.get()`
+  - `broker.SubscriberDropped` — raised by `get()` once a subscriber that fell behind has delivered its buffered events; the SSE endpoint MUST catch it and close the stream
   - `broker.subscriber_count(user_id: uuid.UUID) -> int`
-  - Task 3 calls `publish`; Task 9 calls `subscribe`.
+  - Task 3 calls `publish`; Task 8 calls `subscribe`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -475,7 +476,7 @@ git commit -m "Add the in-process notification broker"
   - `notify(db, *, user_id: uuid.UUID | None, type: NotificationType, title: str, body: str, link_type: str | None = None, link_id: uuid.UUID | None = None) -> Notification | None` — stages the row, returns `None` and does nothing when `user_id is None`.
   - `list_for_user(db, user_id, *, unread_only: bool = False) -> list[Notification]`
   - `mark_read(db, user_id, notification_id) -> Notification | None`
-  - Tasks 7, 8, 10 call `notify`; Task 9 calls `list_for_user` and `mark_read`.
+  - Tasks 5, 6, 9 call `notify`; Task 8 calls `list_for_user` and `mark_read`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -498,7 +499,7 @@ def user(db_session):
     recorded Postgres fixture gotchas."""
     row = User(
         username=f"u{uuid.uuid4().hex[:10]}", email=f"{uuid.uuid4().hex[:10]}@northstar.example",
-        password_hash="x", role=Role.EMPLOYEE, is_active=True,
+        full_name="Test User", password_hash="x", role=Role.EMPLOYEE, is_active=True,
     )
     db_session.add(row)
     db_session.flush()
@@ -734,7 +735,7 @@ git commit -m "Add the notification service, publishing on commit"
   - `allowlist_patterns() -> list[str]`
   - `send(db, *, approval: ApprovalRequest, to_address: str, subject: str, body: str) -> OutboundEmail`
   - `_transport` module singleton and `SmtpTransport` protocol with `send(message: EmailMessage, *, to_address: str) -> str`.
-  - Task 6's `send_email` handler calls `send`.
+  - Task 5's `send_email` handler calls `send`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1107,21 +1108,21 @@ git commit -m "Add the email path: allowlist, transport selection, outbound_emai
 
 ---
 
-### Task 5: Executor — registry, re-validation, re-authorization, simulated handlers
+### Task 5: Executor — registry, re-validation, re-authorization, all seven handlers
 
 **Files:**
 - Create: `backend/app/approvals/executor.py`
 - Create: `backend/tests/test_approvals_executor.py`
 
 **Interfaces:**
-- Consumes: `RunTrigger.APPROVAL_EXECUTION` (Task 1).
+- Consumes: `RunTrigger.APPROVAL_EXECUTION` (Task 1), `email.send` (Task 4), `notifications.service.notify` (Task 3), `tickets.service.reassign`, `chat.service.append_message`.
 - Produces:
   - `execute(db, approval: ApprovalRequest) -> ExecutionOutcome` — untraced logic, what unit tests call
   - `execute_traced(db, approval) -> ExecutionOutcome` — same, wrapped in the `executor` span; requires an active run
   - `ExecutionOutcome` dataclass: `ok: bool`, `result: dict`
   - `HANDLERS: dict[ApprovalActionType, Handler]`
   - `PAYLOAD_SCHEMAS: dict[ApprovalActionType, type[BaseModel]]`
-  - Task 6 adds the four real handlers to `HANDLERS`; Task 7's `decide()` calls `execute`.
+  - `HANDLERS` complete for all seven action types. Task 6's `decide()` calls `execute_traced`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1144,7 +1145,7 @@ from app.db.models import (
 def requester(db_session):
     row = User(
         username=f"u{uuid.uuid4().hex[:10]}", email=f"{uuid.uuid4().hex[:10]}@northstar.example",
-        password_hash="x", role=Role.EMPLOYEE, is_active=True,
+        full_name="Test User", password_hash="x", role=Role.EMPLOYEE, is_active=True,
     )
     db_session.add(row)
     db_session.flush()
@@ -1451,34 +1452,12 @@ Run: `uv run python -c "import inspect, app.rbac.policy as p; print(inspect.gets
 
 Adjust `decision.reason` and the `Principal(...)` constructor calls above to match the real field names exactly. Do not guess.
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [ ] **Step 5: Do NOT commit yet — the handler-completeness test is still red**
 
 Run: `uv run pytest tests/test_approvals_executor.py -v`
-Expected: `test_every_action_type_has_a_handler` FAILS listing the four real actions — that is correct at this point; Task 6 adds them. Every other test passes.
+Expected: `test_every_action_type_has_a_handler` FAILS listing the four real actions; every other test passes. Steps 6-10 below add those four handlers. Nothing is committed until the whole file is green — this task's deliverable is a complete executor, not a registry with three of seven entries.
 
-Mark that one test as expected-to-fail for this task only by running the rest: `uv run pytest tests/test_approvals_executor.py -v --deselect tests/test_approvals_executor.py::test_every_action_type_has_a_handler`
-Expected: all selected tests pass.
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add backend/app/approvals/executor.py backend/tests/test_approvals_executor.py
-git commit -m "Add the approval executor: re-validation, re-authorization, simulated handlers"
-```
-
----
-
-### Task 6: Executor — the four real handlers
-
-**Files:**
-- Modify: `backend/app/approvals/executor.py`
-- Modify: `backend/tests/test_approvals_executor.py`
-
-**Interfaces:**
-- Consumes: `email.send` (Task 4), `notifications.service.notify` (Task 3), `tickets.service.reassign`, `chat.service.append_message`.
-- Produces: `HANDLERS` complete for all seven action types.
-
-- [ ] **Step 1: Write the failing tests**
+- [ ] **Step 6: Write the failing tests for the four real handlers**
 
 Append to `backend/tests/test_approvals_executor.py`:
 
@@ -1597,12 +1576,12 @@ def test_cross_department_assignment_on_a_missing_ticket_fails(db_session, make_
     assert outcome.ok is False
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [ ] **Step 7: Run the tests to verify they fail**
 
 Run: `uv run pytest tests/test_approvals_executor.py -v`
 Expected: the new tests FAIL with `KeyError: <ApprovalActionType.SEND_EMAIL...>`.
 
-- [ ] **Step 3: Implement the four real handlers**
+- [ ] **Step 8: Implement the four real handlers**
 
 In `backend/app/approvals/executor.py`, add these imports at the top:
 
@@ -1675,7 +1654,6 @@ def _handle_disclose_restricted_information(
 def _handle_cross_department_ticket_assignment(
     db: Session, approval: ApprovalRequest, payload: CrossDepartmentTicketAssignmentPayload,
 ) -> dict:
-    from app.notifications import service as notifications
     from app.tickets.service import reassign
 
     ticket = db.query(Ticket).filter(Ticket.id == _uuid.UUID(payload.ticket_id)).one_or_none()
@@ -1683,14 +1661,12 @@ def _handle_cross_department_ticket_assignment(
         raise LookupError(f"no ticket with id {payload.ticket_id}")
 
     previous = ticket.assignee_helpdesk_ref
+    # Deliberately does NOT notify here. Task 9 makes tickets.service.reassign
+    # the single owner of the TICKET_ASSIGNED trigger, so every reassignment
+    # notifies exactly once regardless of who initiated it. Emitting here as
+    # well would send the assignee two identical notifications.
     reassign(db, ticket, assignee_helpdesk_ref=payload.assignee_helpdesk_ref, rationale=payload.rationale)
     db.flush()
-
-    notifications.notify(
-        db, user_id=ticket.assignee_user_id, type=NotificationType.TICKET_ASSIGNED,
-        title=f"Ticket TCK-{ticket.ticket_number:06d} assigned to you",
-        body=payload.rationale, link_type="ticket", link_id=ticket.id,
-    )
     return {
         "ticket_id": str(ticket.id),
         "previous_assignee": previous,
@@ -1712,7 +1688,7 @@ HANDLERS: dict[ApprovalActionType, Handler] = {
 }
 ```
 
-- [ ] **Step 4: Make a failed email a failed execution**
+- [ ] **Step 9: Make a failed email a failed execution**
 
 `_handle_send_email` returns normally even when the send failed, which would record `executed`. In `execute()`, replace the handler call with:
 
@@ -1730,34 +1706,34 @@ HANDLERS: dict[ApprovalActionType, Handler] = {
     return ExecutionOutcome(True, result)
 ```
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [ ] **Step 10: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/test_approvals_executor.py -v`
-Expected: all pass, including `test_every_action_type_has_a_handler`.
+Expected: ALL pass, including `test_every_action_type_has_a_handler`. Nothing in this file may be red at commit.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 11: Commit**
 
 ```bash
 git add backend/app/approvals/executor.py backend/tests/test_approvals_executor.py
-git commit -m "Add the four real executor handlers"
+git commit -m "Add the approval executor: re-validation, re-authorization, all seven handlers"
 ```
 
 ---
 
-### Task 7: `approvals.service.decide()`
+### Task 6: `approvals.service.decide()`
 
 **Files:**
 - Modify: `backend/app/approvals/service.py`
 - Modify: `backend/tests/test_approvals_service.py`
 
 **Interfaces:**
-- Consumes: `executor.execute_traced` (Tasks 5–6), `notifications.service.notify` (Task 3), `audit.record_audit`.
+- Consumes: `executor.execute_traced` (Task 5), `notifications.service.notify` (Task 3), `audit.record_audit`.
 - Produces:
   - `decide(db, principal: Principal, request_id: uuid.UUID, *, approve: bool, note: str = "") -> ApprovalRequest`
   - `NotPending(RuntimeError)`
   - `get(db, request_id) -> ApprovalRequest | None`
   - `list_for_admin(db, *, status: ApprovalStatus | None = None) -> list[ApprovalRequest]`
-  - Task 8's router calls all four.
+  - Task 7's router calls all four.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1780,7 +1756,7 @@ from app.rbac.policy import Principal
 def admin_principal(db_session):
     admin = User(
         username=f"a{_uuid.uuid4().hex[:10]}", email=f"{_uuid.uuid4().hex[:10]}@northstar.example",
-        password_hash="x", role=Role.ADMIN, is_active=True,
+        full_name="Test User", password_hash="x", role=Role.ADMIN, is_active=True,
     )
     db_session.add(admin)
     db_session.flush()
@@ -1794,7 +1770,7 @@ def admin_principal(db_session):
 def pending_request(db_session):
     requester = User(
         username=f"u{_uuid.uuid4().hex[:10]}", email=f"{_uuid.uuid4().hex[:10]}@northstar.example",
-        password_hash="x", role=Role.EMPLOYEE, is_active=True,
+        full_name="Test User", password_hash="x", role=Role.EMPLOYEE, is_active=True,
     )
     db_session.add(requester)
     conv = Conversation(guest_name="G", guest_email="g@northstar.example")
@@ -2076,7 +2052,7 @@ git commit -m "Add decide(): the approval state machine and its execution"
 
 ---
 
-### Task 8: The admin approvals router
+### Task 7: The admin approvals router
 
 **Files:**
 - Create: `backend/app/admin/__init__.py` (empty)
@@ -2303,7 +2279,7 @@ git commit -m "Add the admin approvals queue and decide endpoint"
 
 ---
 
-### Task 9: The notifications router and SSE stream
+### Task 8: The notifications router and SSE stream
 
 **Files:**
 - Create: `backend/app/notifications/router.py`
@@ -2512,6 +2488,13 @@ async def stream_notifications(principal: CurrentPrincipal, db: DbSession) -> St
                 except asyncio.TimeoutError:
                     yield ": keepalive\n\n"
                     continue
+                except broker.SubscriberDropped:
+                    # This client fell too far behind and the broker stopped
+                    # queueing for it. Close the stream rather than pretend it is
+                    # still live: the browser reconnects and the replay above
+                    # re-delivers everything it missed from the database, so
+                    # nothing durable is lost.
+                    return
                 if event.get("id") in seen:
                     continue
                 seen.add(event.get("id"))
@@ -2546,7 +2529,7 @@ git commit -m "Add the notification feed and its SSE stream"
 
 ---
 
-### Task 10: Retrofit the four ticket notification triggers
+### Task 9: Retrofit the four ticket notification triggers
 
 **Files:**
 - Modify: `backend/app/tickets/service.py`
@@ -2577,7 +2560,7 @@ from app.tickets import service as tickets
 def helpdesk_user(db_session):
     row = User(
         username=f"hd{uuid.uuid4().hex[:8]}", email=f"{uuid.uuid4().hex[:8]}@northstar.example",
-        password_hash="x", role=Role.HELPDESK, helpdesk_ref="HD-905", is_active=True,
+        full_name="Test User", password_hash="x", role=Role.HELPDESK, helpdesk_ref="HD-905", is_active=True,
     )
     db_session.add(row)
     db_session.flush()
@@ -2597,10 +2580,44 @@ def test_reassign_notifies_the_new_assignee(db_session, make_ticket, helpdesk_us
     assert len(_notifications_of(db_session, helpdesk_user.id, NotificationType.TICKET_ASSIGNED)) == 1
 
 
+def test_an_approved_cross_department_assignment_notifies_exactly_once(
+    db_session, make_ticket, helpdesk_user,
+):
+    """reassign() is the single owner of the TICKET_ASSIGNED trigger. The
+    executor handler calls reassign() and must NOT emit its own notification
+    -- doing so would send the assignee two identical ones, which no
+    single-module test would catch."""
+    import uuid as _uuid
+
+    from app.approvals import executor
+    from app.db.models import (
+        ApprovalActionType, ApprovalRequest, ApprovalStatus, RiskLevel,
+    )
+
+    ticket = make_ticket(assignee_helpdesk_ref="HD-901")
+    approval = ApprovalRequest(
+        conversation_id=ticket.conversation_id, task_id=None, requester_user_id=None,
+        action_type=ApprovalActionType.CROSS_DEPARTMENT_TICKET_ASSIGNMENT,
+        action_payload={
+            "ticket_id": str(ticket.id), "assignee_helpdesk_ref": "HD-905",
+            "rationale": "Specialist match",
+        },
+        justification="j", risk_level=RiskLevel.LOW, agent_summary="a",
+        status=ApprovalStatus.APPROVED,
+    )
+    db_session.add(approval)
+    db_session.flush()
+
+    outcome = executor.execute(db_session, approval)
+    db_session.flush()
+    assert outcome.ok is True
+    assert len(_notifications_of(db_session, helpdesk_user.id, NotificationType.TICKET_ASSIGNED)) == 1
+
+
 def test_status_change_notifies_the_requester(db_session, make_ticket):
     requester = User(
         username=f"u{uuid.uuid4().hex[:8]}", email=f"{uuid.uuid4().hex[:8]}@northstar.example",
-        password_hash="x", role=Role.EMPLOYEE, is_active=True,
+        full_name="Test User", password_hash="x", role=Role.EMPLOYEE, is_active=True,
     )
     db_session.add(requester)
     db_session.flush()
@@ -2614,7 +2631,7 @@ def test_status_change_notifies_the_requester(db_session, make_ticket):
 def test_resolve_notifies_the_requester(db_session, make_ticket):
     requester = User(
         username=f"u{uuid.uuid4().hex[:8]}", email=f"{uuid.uuid4().hex[:8]}@northstar.example",
-        password_hash="x", role=Role.EMPLOYEE, is_active=True,
+        full_name="Test User", password_hash="x", role=Role.EMPLOYEE, is_active=True,
     )
     db_session.add(requester)
     db_session.flush()
@@ -2638,7 +2655,7 @@ def test_resolve_does_not_double_notify(db_session, make_ticket):
     get one TICKET_RESOLVED notification, not a status-changed one as well."""
     requester = User(
         username=f"u{uuid.uuid4().hex[:8]}", email=f"{uuid.uuid4().hex[:8]}@northstar.example",
-        password_hash="x", role=Role.EMPLOYEE, is_active=True,
+        full_name="Test User", password_hash="x", role=Role.EMPLOYEE, is_active=True,
     )
     db_session.add(requester)
     db_session.flush()
@@ -2773,7 +2790,7 @@ git commit -m "Emit notifications on every ticket lifecycle event"
 
 ---
 
-### Task 11: The Phase 6 gate test
+### Task 10: The Phase 6 gate test
 
 **Files:**
 - Create: `backend/tests/test_phase6_gate.py`
@@ -2923,7 +2940,7 @@ git commit -m "Add the phase 6 gate test: approve, execute, SSE, email"
 
 ---
 
-### Task 12: The live SMTP test, docs, and the full suite
+### Task 11: The live SMTP test, docs, and the full suite
 
 **Files:**
 - Create: `backend/tests/test_email_live_smtp.py`
@@ -3059,8 +3076,8 @@ git commit -m "Add the live SMTP test and document the phase 6 surface"
 
 ## Self-Review Notes
 
-**Spec coverage.** Every section of the phase 6 design maps to a task: §2.1→T5, §2.2→T1, §2.3→T1, §2.4→T4, §3→T2–T9, §4→T7, §5.1→T5, §5.2→T5+T6, §6→T4, §7→T1, §8.1→T2, §8.2→T3, §8.3→T9, §8.4→T10, §8.5→T3+T7+T10, §9→T8+T9, §10→every task plus T11–T12, §11→T7 and T9 notes.
+**Spec coverage.** Every section of the phase 6 design maps to a task: §2.1→T5, §2.2→T1, §2.3→T1, §2.4→T4, §3→T2–T8, §4→T6, §5.1→T5, §5.2→T5, §6→T4, §7→T1, §8.1→T2, §8.2→T3, §8.3→T8, §8.4→T9, §8.5→T3+T6+T9, §9→T7+T8, §10→every task plus T10–T11, §11→T6 and T8 notes.
 
 **Deliberately deferred.** `POST /api/notifications/{id}/read` returning the full row rather than 204 is a small choice made for testability. The `disclose_restricted_information` handler posts a system message but does not push it down the *chat* SSE stream — that stream only exists during an active turn, and a conversation-level push channel is not in this phase's scope.
 
-**Known risk.** Task 10 adds `notify()` calls inside `tickets/service.py` functions that Phase 5 tests already exercise heavily. If those tests break, the cause is almost certainly a `User` row that does not exist for a `requester_user_id`, not a bug in the notification code — check the fixture before changing the service.
+**Known risk.** Task 9 adds `notify()` calls inside `tickets/service.py` functions that Phase 5 tests already exercise heavily. If those tests break, the cause is almost certainly a `User` row that does not exist for a `requester_user_id`, not a bug in the notification code — check the fixture before changing the service.

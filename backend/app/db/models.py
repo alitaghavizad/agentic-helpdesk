@@ -152,6 +152,7 @@ class RunTrigger(str, enum.Enum):
     DOSSIER = "dossier"
     REFLECTION = "reflection"
     INGEST_EVAL = "ingest_eval"
+    APPROVAL_EXECUTION = "approval_execution"
 
 
 class RunStatus(str, enum.Enum):
@@ -381,6 +382,15 @@ class OutboundEmail(Base):
 
     id: Mapped[uuid.UUID] = _uuid_pk()
     approval_request_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("approval_requests.id"), nullable=False)
+    # Spec 5.3's invariant lives in the database, not in application code:
+    # this column mirrors the approval's status through a composite FK with
+    # ON UPDATE CASCADE, and a CHECK forbids the pre-approval states. Never
+    # set it by hand to something the approval is not actually in -- the FK
+    # will reject the row. See the phase 6 spec section 7.
+    approval_status_at_send: Mapped[ApprovalStatus] = mapped_column(
+        SAEnum(ApprovalStatus, name="approval_status", values_callable=lambda x: [e.value for e in x]),
+        nullable=False,
+    )
     to_address: Mapped[str] = mapped_column(String(255), nullable=False)
     subject: Mapped[str] = mapped_column(String(500), nullable=False)
     body: Mapped[str] = mapped_column(Text, nullable=False)

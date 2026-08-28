@@ -1,3 +1,22 @@
+import os
+
+# Must run BEFORE chromadb/httpx are imported below, because httpx snapshots
+# proxy configuration when a client is constructed.
+#
+# httpx honours the operating system's proxy settings (trust_env defaults to
+# True), and on Windows that includes whatever a VPN or proxy client has
+# written to the registry -- observed here as http://127.0.0.1:10808. Routing
+# a localhost request through that proxy returns 503, so every Chroma-backed
+# test fails with a connectivity error that looks like Chroma being down. It
+# is not: curl succeeds against the same URL at the same moment, because curl
+# does not read the Windows registry proxy.
+#
+# Nothing in this project ever needs a proxy to reach its own services, so
+# exempting them is safe and makes the suite independent of whether a VPN
+# client happens to be running.
+os.environ.setdefault("NO_PROXY", "localhost,127.0.0.1,::1")
+os.environ.setdefault("no_proxy", "localhost,127.0.0.1,::1")
+
 import subprocess
 import sys
 from pathlib import Path
