@@ -5,6 +5,7 @@ import json
 from urllib.parse import urlparse
 
 from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import get_default_environment
 from mcp.client.stdio import stdio_client
 
 from app.config import get_settings
@@ -64,6 +65,21 @@ class McpChromaBackend:
                 "--ssl",
                 "false",
             ],
+            # StdioServerParameters(env=None) gives the child the MCP SDK's
+            # deliberately minimal default environment, which carries no proxy
+            # settings. That is not enough on Windows: httpx inside chroma-mcp
+            # still reads the SYSTEM proxy from the registry, so a VPN client
+            # listening on e.g. 127.0.0.1:10808 silently intercepts the child's
+            # requests to our local Chroma and answers 503. The child then dies
+            # and every MCP-backed call surfaces as "Connection closed", which
+            # looks like Chroma being down rather than a proxy problem.
+            # Exempting loopback costs nothing -- this server never needs a
+            # proxy to reach a service on the same machine.
+            env={
+                **get_default_environment(),
+                "NO_PROXY": "localhost,127.0.0.1,::1",
+                "no_proxy": "localhost,127.0.0.1,::1",
+            },
         )
         assert self._ready_event is not None
         assert self._close_event is not None
