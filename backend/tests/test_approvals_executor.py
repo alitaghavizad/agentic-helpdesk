@@ -168,6 +168,48 @@ def test_send_email_records_a_failure_as_a_failed_outcome(db_session, make_appro
     assert outcome.result["smtp_response"] == "recipient not allowlisted"
 
 
+@pytest.mark.parametrize("field,value,limit", [
+    ("subject", "s" * 501, 500),
+    ("to_address", "a" * 250 + "@northstar.example", 255),
+])
+def test_an_oversized_send_email_field_is_payload_invalid(
+    db_session, make_approval, monkeypatch, field, value, limit,
+):
+    """The payload is model-authored and nothing else bounds it, but
+    outbound_emails.subject is String(500) and .to_address is String(255).
+    Without a bound on the schema the oversized value reached the pre-send
+    flush and raised StringDataRightTruncation from inside the database --
+    reported as `handler_failed` at best, and with the session already
+    poisoned. It must be caught by re-validation instead, with the accurate
+    reason and before any row is written or any socket opened.
+    """
+    sent = []
+
+    class T:
+        def send(self, message, *, to_address: str) -> str:
+            sent.append(to_address)
+            return "250 OK"
+
+    monkeypatch.setattr(email_module, "_transport", T())
+    monkeypatch.setattr(email_module, "allowlist_patterns", lambda: ["*@northstar.example"])
+
+    payload = {"to_address": "ops@northstar.example", "subject": "Subject", "body": "Body"}
+    payload[field] = value
+    approval = make_approval(ApprovalActionType.SEND_EMAIL, payload)
+
+    outcome = executor.execute(db_session, approval)
+
+    assert outcome.ok is False
+    assert outcome.result["reason"] == "payload_invalid"
+    assert field in outcome.result["detail"]
+    assert str(limit) in outcome.result["detail"]
+    assert sent == [], "an over-long payload must not reach the transport"
+    from app.db.models import OutboundEmail
+    assert db_session.query(OutboundEmail).filter(
+        OutboundEmail.approval_request_id == approval.id,
+    ).count() == 0
+
+
 def test_update_user_clearance_writes_the_column(db_session, make_approval, requester):
     approval = make_approval(
         ApprovalActionType.UPDATE_USER_CLEARANCE,

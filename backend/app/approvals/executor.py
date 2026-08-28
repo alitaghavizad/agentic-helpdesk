@@ -23,7 +23,7 @@ import uuid as _uuid
 from dataclasses import dataclass
 from typing import Callable
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy.orm import Session
 
 from app.audit.service import record_audit
@@ -45,8 +45,15 @@ class ExecutionOutcome:
 # "if the payload changed ... execution fails with a recorded reason".
 
 class SendEmailPayload(BaseModel):
-    to_address: str
-    subject: str
+    # max_length mirrors outbound_emails.to_address (String(255)) and
+    # .subject (String(500)). The payload is model-authored, so nothing else
+    # bounds it: an over-long subject would otherwise reach the pre-send
+    # flush in notifications/email.py and raise StringDataRightTruncation
+    # from inside the database. Rejecting it here reports the accurate
+    # reason, `payload_invalid`, before any row is written or any socket
+    # opened. `body` is intentionally unbounded -- the column is TEXT.
+    to_address: str = Field(max_length=255)
+    subject: str = Field(max_length=500)
     body: str
 
 
@@ -167,8 +174,21 @@ def _handle_disclose_restricted_information(
     """Spec 9.2: the disclosure is delivered to the user as a system message
     in the conversation, attributed to the approving admin. Attribution is
     the point -- an unattributed disclosure is indistinguishable from the
-    agent having decided to answer on its own."""
-    from app.chat.service import append_message
+    agent having decided to answer on its own.
+
+    Deliberately stages the Message itself instead of calling
+    `chat.service.append_message`, which is otherwise the obvious reuse.
+    `append_message` COMMITS (the chat turn path depends on that, so it must
+    not change), and committing here would commit half of `decide()`: at
+    that point the approval is `approved` with `executed_at` and
+    `execution_result` still NULL. Anything failing afterwards would strand
+    it there forever -- not `pending`, so every retry 409s, and not
+    terminal, so nothing records what happened -- with the restricted
+    information already disclosed. Staging keeps the disclosure inside
+    `decide()`'s single transaction, so it lands only if the whole decision
+    does.
+    """
+    from app.db.models import Message
 
     admin_name = "an administrator"
     if approval.decided_by_user_id:
@@ -180,9 +200,13 @@ def _handle_disclose_restricted_information(
         f"Approved disclosure (REQ-{approval.request_number:06d}), released by {admin_name}:\n\n"
         f"{payload.disclosure}"
     )
-    message = append_message(
-        db, approval.conversation_id, MessageRole.SYSTEM, [{"type": "text", "text": text}],
+    message = Message(
+        conversation_id=approval.conversation_id,
+        role=MessageRole.SYSTEM,
+        content=[{"type": "text", "text": text}],
     )
+    db.add(message)
+    db.flush()
     return {"message_id": str(message.id), "attributed_to": admin_name}
 
 
@@ -295,10 +319,23 @@ def execute(db: Session, approval: ApprovalRequest) -> ExecutionOutcome:
         return ExecutionOutcome(False, {"reason": "policy_denied", "detail": decision.reason})
 
     handler = HANDLERS[approval.action_type]
+    # The savepoint is what makes `handler_failed` a survivable outcome
+    # rather than a poisoned session. Catching the exception is not enough:
+    # if the handler failed inside the DATABASE (a constraint violation, a
+    # value too long for its column), SQLAlchemy marks the transaction as
+    # needing rollback, and decide()'s very next db.flush() -- the one that
+    # writes `failed` and its reason -- raises PendingRollbackError instead.
+    # The whole decision then rolls back and the approval is left `pending`
+    # with the admin seeing an opaque 500, reproducibly, forever. Rolling
+    # back to the savepoint discards the handler's partial writes and leaves
+    # the session usable, so `failed` is still recorded and committed.
+    savepoint = db.begin_nested()
     try:
         result = handler(db, approval, payload)
     except Exception as exc:  # noqa: BLE001 -- recorded on the approval, never raised at the admin
+        savepoint.rollback()
         return ExecutionOutcome(False, {"reason": "handler_failed", "detail": f"{type(exc).__name__}: {exc}"})
+    savepoint.commit()  # releases the savepoint; the enclosing transaction is untouched
 
     # An email that did not leave the building is a failed execution, not a
     # successful one that quietly sent nothing.

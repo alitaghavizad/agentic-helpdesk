@@ -32,8 +32,17 @@ from app.db.models import ApprovalRequest, ApprovalStatus, EmailStatus, Outbound
 
 _SEND_TIMEOUT_SECONDS = 10
 
-# The approval states from which a send is legitimate. Mirrors the database
-# CHECK in the phase 6 migration; keep the two in step.
+# The approval states from which STARTING a send is legitimate.
+#
+# This is deliberately NARROWER than the database CHECK on
+# outbound_emails.approval_status_at_send, and the two must not be made to
+# match. The CHECK also permits 'failed' because the composite FK carries
+# ON UPDATE CASCADE: when an execution fails, the approval moves to
+# 'failed' and cascades that value into the already-written row of the send
+# that failed. Widening this set to match the CHECK would let a send begin
+# from an approval that was never granted; narrowing the CHECK to match
+# this set would make the cascade violate its own constraint and break
+# every failure path.
 _SENDABLE_STATUSES = frozenset({ApprovalStatus.APPROVED, ApprovalStatus.EXECUTED})
 
 

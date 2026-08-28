@@ -41,8 +41,6 @@ def test_an_approved_cross_department_assignment_notifies_exactly_once(
     executor handler calls reassign() and must NOT emit its own notification
     -- doing so would send the assignee two identical ones, which no
     single-module test would catch."""
-    import uuid as _uuid
-
     from app.approvals import executor
     from app.db.models import (
         ApprovalActionType, ApprovalRequest, ApprovalStatus, RiskLevel,

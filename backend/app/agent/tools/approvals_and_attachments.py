@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.approvals.service import create as create_approval_request
+from app.db.models import Task
 from app.rbac.policy import Principal
 
 
@@ -26,10 +27,28 @@ class RequestAttachmentArgs(BaseModel):
 async def create_approval_request_handler(
     principal: Principal, db: Session, args: CreateApprovalRequestArgs, *, conversation_id: uuid.UUID,
 ) -> dict:
+    # `task_id` is model-supplied while `conversation_id` is threaded in by
+    # dispatch_tool and cannot be influenced by the model, so an unchecked
+    # task_id lets one conversation's approval request be filed against
+    # another conversation's task -- linking it to work the requester has no
+    # part in. tickets.service.create_ticket already rejects exactly this,
+    # with these same two messages; the two paths must agree, or the weaker
+    # one is simply the way around the stronger.
+    task_id = uuid.UUID(args.task_id) if args.task_id else None
+    if task_id is not None:
+        task = db.get(Task, task_id)
+        if task is None:
+            return {"is_error": True, "content": f"task {task_id} does not exist"}
+        if task.conversation_id != conversation_id:
+            return {
+                "is_error": True,
+                "content": f"task {task_id} does not belong to conversation {conversation_id}",
+            }
+
     request = create_approval_request(
         db,
         conversation_id=conversation_id,
-        task_id=uuid.UUID(args.task_id) if args.task_id else None,
+        task_id=task_id,
         requester_user_id=uuid.UUID(principal.user_id) if principal.kind == "user" else None,
         action_type=args.action_type, action_payload=args.action_payload,
         justification=args.justification, risk_level=args.risk_level, agent_summary=args.agent_summary,

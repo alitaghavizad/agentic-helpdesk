@@ -23,6 +23,7 @@ from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from app.db.session import get_sessionmaker
 from app.deps import CurrentPrincipal, DbSession
 from app.notifications import broker
 from app.notifications import service
@@ -81,11 +82,24 @@ def mark_notification_read(
 
 
 @router.get("/stream")
-async def stream_notifications(principal: CurrentPrincipal, db: DbSession) -> StreamingResponse:
+async def stream_notifications(principal: CurrentPrincipal) -> StreamingResponse:
+    """Takes NO `db: DbSession` dependency, on purpose.
+
+    FastAPI tears the dependency stack down only after the response is
+    complete, and an SSE response completes when the client disconnects. A
+    dependency-provided session would therefore stay checked out of the
+    pool -- and, once it had read anything, `idle in transaction` -- for the
+    entire life of the stream. Measured: three open streams held three such
+    backends. The pool is pool_size=5 + max_overflow=10, so about fifteen
+    concurrent streams exhaust it and every other request (login, chat,
+    approvals) blocks and then fails; long-lived open snapshots also hold
+    back xmin and stop VACUUM from reclaiming anything. The backlog read
+    below gets its own session, closed before the keepalive loop begins,
+    so an idle stream holds no connection at all.
+    """
     user_id = _require_user(principal)
 
     async def event_stream():
-        seen: set[str] = set()
         # SUBSCRIBE FIRST, THEN READ THE BACKLOG. The database read must
         # happen after the subscription exists, or a notification committed
         # between the two is in neither: absent from the snapshot because it
@@ -93,13 +107,30 @@ async def stream_notifications(principal: CurrentPrincipal, db: DbSession) -> St
         # listening yet. Subscribing first makes the two sources overlap
         # instead of leaving a gap, and `seen` below collapses that overlap.
         with broker.subscribe(user_id) as subscription:
-            for r in service.list_for_user(db, user_id, unread_only=True):
-                event = {
-                    "type": r.type.value, "id": str(r.id), "title": r.title, "body": r.body,
-                    "link_type": r.link_type, "link_id": str(r.link_id) if r.link_id else None,
-                    "created_at": r.created_at.isoformat() if r.created_at else None,
-                }
-                seen.add(event["id"])
+            # Read the whole backlog into memory and drop the session before
+            # the first yield, so no connection is held while the generator
+            # is parked. Serializing here rather than while yielding also
+            # keeps every ORM attribute access inside the session's lifetime.
+            with get_sessionmaker()() as db:
+                backlog = [
+                    {
+                        "type": r.type.value, "id": str(r.id), "title": r.title, "body": r.body,
+                        "link_type": r.link_type, "link_id": str(r.link_id) if r.link_id else None,
+                        "created_at": r.created_at.isoformat() if r.created_at else None,
+                    }
+                    for r in service.list_for_user(db, user_id, unread_only=True)
+                ]
+            # `seen` holds the backlog ids and nothing else, and never grows
+            # after this point. That is sufficient, not a shortcut: the only
+            # duplicate possible is a row that is both replayed from the
+            # database and published live during the overlap window above.
+            # The broker publishes each notification to a subscriber exactly
+            # once, so a live event carrying an id that was NOT in the
+            # backlog can never arrive twice -- adding live ids would grow
+            # the set without bound, for the life of the stream, to guard
+            # against a repeat that cannot happen.
+            seen = {event["id"] for event in backlog}
+            for event in backlog:
                 yield f"data: {json.dumps(event)}\n\n"
             while True:
                 try:
@@ -116,7 +147,6 @@ async def stream_notifications(principal: CurrentPrincipal, db: DbSession) -> St
                     return
                 if event.get("id") in seen:
                     continue
-                seen.add(event.get("id"))
                 yield f"data: {json.dumps(event)}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")

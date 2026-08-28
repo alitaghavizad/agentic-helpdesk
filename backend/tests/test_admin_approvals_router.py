@@ -158,6 +158,33 @@ def test_deciding_twice_is_a_conflict(client, db_session, pending):
     assert second.status_code == 409
 
 
+def test_an_oversized_send_email_subject_is_a_recorded_failure_not_a_500(client, db_session, pending):
+    """The subject is model-authored and outbound_emails.subject is
+    String(500). Before SendEmailPayload was bounded, an over-long subject
+    blew up at the pre-send flush with StringDataRightTruncation, poisoned
+    the session so decide() could not record the failure, rolled the whole
+    decision back, and handed the admin an opaque 500 on a request that
+    stayed `pending` -- reproducibly, on every retry. The correct outcome is
+    an ordinary 200 carrying a terminal `failed` and the accurate reason.
+    """
+    pending.action_type = ApprovalActionType.SEND_EMAIL
+    pending.action_payload = {"to_address": "ops@northstar.example", "subject": "s" * 600, "body": "b"}
+    db_session.commit()
+    _, admin_headers = _login(client, db_session, username="approvals-admin7", role=Role.ADMIN)
+
+    response = client.post(
+        f"/api/admin/approvals/{pending.id}/decide",
+        json={"approve": True, "note": ""},
+        headers=admin_headers,
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["status"] == "failed"
+    assert body["execution_result"]["reason"] == "payload_invalid"
+    assert "subject" in body["execution_result"]["detail"]
+
+
 def test_deciding_an_unknown_request_is_404(client, db_session):
     _, admin_headers = _login(client, db_session, username="approvals-admin5", role=Role.ADMIN)
 

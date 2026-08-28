@@ -215,6 +215,222 @@ def test_execution_is_recorded_in_an_executor_span(db_session, admin_principal, 
         cleanup_run(run.id)
 
 
+def test_a_handler_that_fails_inside_the_database_still_lands_in_failed(
+    db_session, admin_principal, pending_request, monkeypatch,
+):
+    """A handler can fail in two very different ways. A plain exception is
+    harmless -- `execute` catches it and decide() records `failed`. A
+    DATABASE error is not: it leaves the session needing a rollback, so
+    decide()'s next flush (the one writing `failed` and its reason) raises
+    PendingRollbackError, the whole decision rolls back, and the approval
+    sits at `pending` while the admin gets an opaque 500 that every retry
+    reproduces.
+
+    Reproduced for real, not simulated: the handler here writes an
+    OutboundEmail whose subject exceeds the column's String(500), which is
+    exactly what an unbounded model-authored send_email payload used to do
+    at the pre-send flush.
+    """
+    from app.approvals import executor
+    from app.db.models import EmailStatus, OutboundEmail
+
+    def _fails_inside_the_database(db, approval, payload):
+        db.add(OutboundEmail(
+            approval_request_id=approval.id, approval_status_at_send=approval.status,
+            to_address="ops@northstar.example", subject="x" * 600, body="b",
+            status=EmailStatus.QUEUED,
+        ))
+        db.flush()
+        return {}
+
+    monkeypatch.setitem(executor.HANDLERS, ApprovalActionType.RESET_CREDENTIAL, _fails_inside_the_database)
+    _admin, principal = admin_principal
+
+    result = approvals_service.decide(db_session, principal, pending_request.id, approve=True, note="")
+
+    assert result.status is ApprovalStatus.FAILED
+    assert result.execution_result["reason"] == "handler_failed"
+    assert "DataError" in result.execution_result["detail"]
+    # The decision itself committed, so the admin is not stuck retrying.
+    assert result.decided_at is not None
+    assert db_session.query(OutboundEmail).filter(
+        OutboundEmail.approval_request_id == pending_request.id,
+    ).count() == 0
+
+
+def test_a_disclosure_does_not_survive_a_failed_decision(monkeypatch):
+    """Finding 2. The disclose handler used to call chat.service.append_message,
+    which COMMITS. That commit landed mid-decide(), with the approval at
+    `approved` and executed_at/execution_result still NULL -- so a failure
+    afterwards left the row stuck there forever (not `pending`, so every
+    retry 409s; not terminal, so nothing records what happened) AFTER the
+    restricted information had already been disclosed.
+
+    Runs on real, committing sessions rather than the savepoint-scoped
+    db_session, because the whole point is what survives a transaction that
+    genuinely fails.
+    """
+    from app.db.models import Message
+
+    Session = get_sessionmaker()
+    with Session() as setup:
+        conv = Conversation(guest_name="G", guest_email="g@northstar.example")
+        setup.add(conv)
+        setup.commit()
+        conversation_id = conv.id
+        approval = ApprovalRequest(
+            conversation_id=conversation_id, task_id=None, requester_user_id=None,
+            action_type=ApprovalActionType.DISCLOSE_RESTRICTED_INFORMATION,
+            action_payload={"disclosure": "The build server root password rotates on Fridays."},
+            justification="j", risk_level=RiskLevel.HIGH, agent_summary="a",
+            status=ApprovalStatus.PENDING,
+        )
+        setup.add(approval)
+        setup.commit()
+        approval_id = approval.id
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("simulated failure after the handler ran")
+
+    # decide() notifies AFTER the handler has run and before it commits --
+    # the exact window in which the old code had already committed the
+    # disclosure.
+    monkeypatch.setattr("app.notifications.service.notify", _boom)
+
+    principal = Principal(
+        kind="user", user_id=None, role="admin", clearance=None,
+        department=None, employee_ref=None, helpdesk_ref=None,
+    )
+    try:
+        with Session() as session:
+            with pytest.raises(RuntimeError):
+                approvals_service.decide(session, principal, approval_id, approve=True, note="")
+            session.rollback()
+
+        with Session() as check:
+            messages = check.query(Message).filter(Message.conversation_id == conversation_id).all()
+            assert messages == [], "the disclosure outlived the transaction that failed"
+            assert check.get(ApprovalRequest, approval_id).status is ApprovalStatus.PENDING
+    finally:
+        with Session() as cleanup:
+            cleanup.query(Message).filter(Message.conversation_id == conversation_id).delete(synchronize_session=False)
+            cleanup.query(AuditLog).filter(AuditLog.target_id == str(approval_id)).delete(synchronize_session=False)
+            cleanup.query(ApprovalRequest).filter(ApprovalRequest.id == approval_id).delete(synchronize_session=False)
+            run_ids = [r for (r,) in cleanup.query(Run.id).filter(Run.conversation_id == conversation_id)]
+            if run_ids:
+                cleanup.query(Span).filter(Span.run_id.in_(run_ids)).delete(synchronize_session=False)
+                cleanup.query(Run).filter(Run.id.in_(run_ids)).delete(synchronize_session=False)
+            cleanup.query(Conversation).filter(Conversation.id == conversation_id).delete(synchronize_session=False)
+            cleanup.commit()
+
+
+def test_two_concurrent_decisions_execute_the_action_exactly_once(monkeypatch):
+    """Finding 1, reproduced as a genuine race: two threads, two real
+    sessions, one approval.
+
+    The idempotency guard used to be a plain SELECT, a Python-side status
+    check, and then an UPDATE. Both callers read `pending`; the second one
+    blocked on the row lock the first took at its own UPDATE and then simply
+    carried on once the first committed, because nothing re-read the status
+    it had checked before waiting. On a send_email approval that is two real
+    SMTP sends and two `outbound_emails` rows -- reachable from a
+    double-clicked Approve button or a proxy retrying the POST.
+
+    The overlap is made deterministic rather than hoped for: the transport
+    holds the winner's transaction -- and therefore its row lock -- open
+    while the second decision is started. With SELECT ... FOR UPDATE the
+    loser blocks BEFORE it reads, so it sees the winner's committed
+    `executed` and raises NotPending. Without it, the loser sends again.
+    """
+    import threading
+    import time
+
+    from app.db.models import EmailStatus, Message, OutboundEmail
+    from app.notifications import email as email_module
+
+    sent: list[str] = []
+    first_send_started = threading.Event()
+
+    class _SlowTransport:
+        def send(self, message, *, to_address: str) -> str:
+            sent.append(to_address)
+            first_send_started.set()
+            time.sleep(1.0)
+            return "250 OK"
+
+    monkeypatch.setattr(email_module, "_transport", _SlowTransport())
+    monkeypatch.setattr(email_module, "allowlist_patterns", lambda: ["ops@northstar.example"])
+
+    Session = get_sessionmaker()
+    with Session() as setup:
+        conv = Conversation(guest_name="G", guest_email="g@northstar.example")
+        setup.add(conv)
+        setup.commit()
+        conversation_id = conv.id
+        approval = ApprovalRequest(
+            conversation_id=conversation_id, task_id=None, requester_user_id=None,
+            action_type=ApprovalActionType.SEND_EMAIL,
+            action_payload={"to_address": "ops@northstar.example", "subject": "s", "body": "b"},
+            justification="j", risk_level=RiskLevel.HIGH, agent_summary="a",
+            status=ApprovalStatus.PENDING,
+        )
+        setup.add(approval)
+        setup.commit()
+        approval_id = approval.id
+
+    principal = Principal(
+        kind="user", user_id=None, role="admin", clearance=None,
+        department=None, employee_ref=None, helpdesk_ref=None,
+    )
+    outcomes: list[tuple[str, str | None]] = []
+    outcomes_lock = threading.Lock()
+
+    def _decide() -> None:
+        with Session() as session:
+            try:
+                decided = approvals_service.decide(session, principal, approval_id, approve=True, note="")
+                outcome = ("decided", decided.status.value)
+            except approvals_service.NotPending:
+                outcome = ("not_pending", None)
+            except Exception as exc:  # noqa: BLE001 -- surfaced by the assertions below
+                outcome = ("error", f"{type(exc).__name__}: {exc}")
+        with outcomes_lock:
+            outcomes.append(outcome)
+
+    try:
+        winner = threading.Thread(target=_decide, name="approval-decide-1")
+        winner.start()
+        assert first_send_started.wait(timeout=15), "the first decision never reached the transport"
+        loser = threading.Thread(target=_decide, name="approval-decide-2")
+        loser.start()
+        winner.join(timeout=60)
+        loser.join(timeout=60)
+        assert not winner.is_alive() and not loser.is_alive(), "a decision thread never finished"
+
+        assert sorted(outcomes) == [("decided", "executed"), ("not_pending", None)], outcomes
+        assert sent == ["ops@northstar.example"], f"the approved action executed {len(sent)} times"
+        with Session() as check:
+            rows = check.query(OutboundEmail).filter(
+                OutboundEmail.approval_request_id == approval_id,
+            ).all()
+            assert len(rows) == 1, f"{len(rows)} outbound_emails rows for one approval"
+            assert rows[0].status is EmailStatus.SENT
+    finally:
+        with Session() as cleanup:
+            cleanup.query(OutboundEmail).filter(
+                OutboundEmail.approval_request_id == approval_id,
+            ).delete(synchronize_session=False)
+            cleanup.query(AuditLog).filter(AuditLog.target_id == str(approval_id)).delete(synchronize_session=False)
+            cleanup.query(ApprovalRequest).filter(ApprovalRequest.id == approval_id).delete(synchronize_session=False)
+            run_ids = [r for (r,) in cleanup.query(Run.id).filter(Run.conversation_id == conversation_id)]
+            if run_ids:
+                cleanup.query(Span).filter(Span.run_id.in_(run_ids)).delete(synchronize_session=False)
+                cleanup.query(Run).filter(Run.id.in_(run_ids)).delete(synchronize_session=False)
+            cleanup.query(Message).filter(Message.conversation_id == conversation_id).delete(synchronize_session=False)
+            cleanup.query(Conversation).filter(Conversation.id == conversation_id).delete(synchronize_session=False)
+            cleanup.commit()
+
+
 def test_list_for_admin_filters_by_status(db_session, admin_principal, pending_request):
     pending = approvals_service.list_for_admin(db_session, status=ApprovalStatus.PENDING)
     assert pending_request.id in {r.id for r in pending}

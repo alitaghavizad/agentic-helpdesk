@@ -8,8 +8,84 @@ import uuid
 import httpx
 import pytest
 
-from app.db.models import NotificationType, Role, User
+from app.db.models import Notification, NotificationType, Role, User
+from app.db.session import get_sessionmaker
 from app.notifications import broker, service
+
+# /api/notifications/stream deliberately takes NO `db` dependency: a
+# dependency-provided session stays checked out and `idle in transaction`
+# for the whole life of an SSE response, which ends only when the client
+# disconnects (see the endpoint's docstring). It opens its own short-lived
+# session for the backlog read instead -- which means the `client` fixture's
+# get_db override no longer reaches it, and rows that exist only inside a
+# test's db_session SAVEPOINT are invisible to that read.
+#
+# The two tests below that assert on a REPLAYED BACKLOG therefore create
+# their User and Notification rows through a real, hard-committing session,
+# the same pattern (and for the same cross-connection reason) as
+# tests/test_approvals_service.py and tests/test_admin_approvals_router.py.
+# The other stream tests do not assert on a backlog, so an empty one is
+# fine and they keep using db_session.
+_hard_committed_user_ids: list[uuid.UUID] = []
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _sweep_hard_committed_rows_after_module():
+    """Deletes what `_hard_committed_login` and `_hard_committed_notification`
+    commit, once every test in this module has finished and released its own
+    db_session. Ids are registered the instant they are committed, before
+    anything that could fail, so a test that blows up mid-way still gets its
+    rows swept; the sweep itself runs on `yield`'s far side, which pytest
+    reaches on failure paths too."""
+    yield
+    Session = get_sessionmaker()
+    try:
+        with Session() as session:
+            if _hard_committed_user_ids:
+                session.query(Notification).filter(
+                    Notification.user_id.in_(_hard_committed_user_ids),
+                ).delete(synchronize_session=False)
+                session.query(User).filter(
+                    User.id.in_(_hard_committed_user_ids),
+                ).delete(synchronize_session=False)
+            session.commit()
+    finally:
+        _hard_committed_user_ids.clear()
+
+
+def _hard_committed_login(client, *, username: str, role: Role = Role.EMPLOYEE) -> tuple[uuid.UUID, dict]:
+    """`_login`'s hard-committing twin, for tests whose rows must be visible
+    from a connection other than the test's own. The username carries a
+    random suffix because these rows really do land in the database: a
+    fixed one would collide with itself if a previous run's sweep never
+    got to finish."""
+    from app.auth.security import hash_password
+
+    unique = f"{username}-{uuid.uuid4().hex[:8]}"
+    Session = get_sessionmaker()
+    with Session() as hard_session:
+        user = User(
+            username=unique, email=f"{unique}@northstar.example", full_name=username.title(),
+            password_hash=hash_password("Passw0rd!dev"), role=role,
+        )
+        hard_session.add(user)
+        hard_session.commit()
+        user_id = user.id
+    _hard_committed_user_ids.append(user_id)
+
+    resp = client.post("/api/auth/login", json={"username": unique, "password": "Passw0rd!dev"})
+    assert resp.status_code == 200, resp.text
+    return user_id, {"Authorization": f"Bearer {resp.json()['access_token']}"}
+
+
+def _hard_committed_notification(user_id: uuid.UUID, *, title: str) -> uuid.UUID:
+    Session = get_sessionmaker()
+    with Session() as hard_session:
+        row = service.notify(
+            hard_session, user_id=user_id, type=NotificationType.TICKET_CREATED, title=title, body="b",
+        )
+        hard_session.commit()
+        return row.id
 
 
 def _login(client, db_session, *, username: str, role: Role = Role.EMPLOYEE) -> tuple[User, dict]:
@@ -240,7 +316,7 @@ class _LiveASGITransport(httpx.AsyncBaseTransport):
 
 
 @pytest.mark.asyncio
-async def test_the_stream_replays_unread_rows_then_delivers_live_events(client, db_session):
+async def test_the_stream_replays_unread_rows_then_delivers_live_events(client):
     """TestClient cannot do this: its synchronous iteration cannot interleave
     a publish with a read. This test drives the ASGI app through
     _LiveASGITransport instead of the stock httpx.ASGITransport, which
@@ -256,9 +332,8 @@ async def test_the_stream_replays_unread_rows_then_delivers_live_events(client, 
     """
     from app.main import app
 
-    mine, headers = _login(client, db_session, username="notif-stream")
-    service.notify(db_session, user_id=mine.id, type=NotificationType.TICKET_CREATED, title="Backlog", body="b")
-    db_session.commit()
+    user_id, headers = _hard_committed_login(client, username="notif-stream")
+    _hard_committed_notification(user_id, title="Backlog")
 
     transport = _LiveASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
@@ -269,23 +344,27 @@ async def test_the_stream_replays_unread_rows_then_delivers_live_events(client, 
             replayed = await asyncio.wait_for(_next_event(lines), timeout=5)
             assert replayed["title"] == "Backlog"
 
-            broker.publish(mine.id, {"type": "ticket_assigned", "id": str(uuid.uuid4()), "title": "Live", "body": "b"})
+            broker.publish(user_id, {"type": "ticket_assigned", "id": str(uuid.uuid4()), "title": "Live", "body": "b"})
             live = await asyncio.wait_for(_next_event(lines), timeout=5)
             assert live["title"] == "Live"
 
 
 @pytest.mark.asyncio
-async def test_a_replayed_and_published_event_with_the_same_id_arrives_once(client, db_session):
+async def test_a_replayed_and_published_event_with_the_same_id_arrives_once(client):
     """Regression test for the router's `seen` dedup set. Verified
     load-bearing by deleting the dedup logic and confirming this test then
     fails (see task-8-report.md for the exact before/after run): without
     it, the id-colliding publish below would arrive as a second frame
-    before the sentinel, instead of being swallowed."""
+    before the sentinel, instead of being swallowed.
+
+    `seen` is now seeded from the backlog and never added to afterwards
+    (the set used to grow for the life of the stream), so this test is also
+    what pins the only overlap dedup has to cover: a row that is both
+    replayed from the database and published live."""
     from app.main import app
 
-    mine, headers = _login(client, db_session, username="notif-dedup")
-    row = service.notify(db_session, user_id=mine.id, type=NotificationType.TICKET_CREATED, title="Backlog", body="b")
-    db_session.commit()
+    user_id, headers = _hard_committed_login(client, username="notif-dedup")
+    row_id = _hard_committed_notification(user_id, title="Backlog")
 
     transport = _LiveASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
@@ -294,13 +373,13 @@ async def test_a_replayed_and_published_event_with_the_same_id_arrives_once(clie
             lines = response.aiter_lines()
 
             replayed = await asyncio.wait_for(_next_event(lines), timeout=5)
-            assert replayed["id"] == str(row.id)
+            assert replayed["id"] == str(row_id)
 
             # Same id as the row just replayed: a duplicate that dedup must swallow.
-            broker.publish(mine.id, {"type": "ticket_created", "id": str(row.id), "title": "Duplicate", "body": "b"})
+            broker.publish(user_id, {"type": "ticket_created", "id": str(row_id), "title": "Duplicate", "body": "b"})
             # A distinct event published right after it. If dedup is working,
             # this -- not a second copy of "Duplicate" -- is the next frame.
-            broker.publish(mine.id, {"type": "ticket_assigned", "id": str(uuid.uuid4()), "title": "Sentinel", "body": "b"})
+            broker.publish(user_id, {"type": "ticket_assigned", "id": str(uuid.uuid4()), "title": "Sentinel", "body": "b"})
 
             next_event = await asyncio.wait_for(_next_event(lines), timeout=5)
             assert next_event["title"] == "Sentinel"
@@ -391,6 +470,79 @@ async def test_a_notification_published_during_the_backlog_read_is_not_lost(clie
             lines = response.aiter_lines()
             event = await asyncio.wait_for(_next_event(lines), timeout=5)
             assert event["title"] == "Raced"
+
+
+@pytest.mark.asyncio
+async def test_an_open_stream_holds_no_database_connection():
+    """Finding 3. `stream_notifications` used to take a `db: DbSession`
+    dependency and read the backlog inside the generator. FastAPI exits the
+    dependency stack only once the response is complete, and an SSE response
+    completes when the client disconnects -- so the session stayed checked
+    out, and (having read) `idle in transaction`, for as long as the client
+    stayed connected. Measured against real uvicorn: three open streams,
+    three such backends. pool_size=5 + max_overflow=10 means roughly fifteen
+    concurrent streams exhaust the pool and every other request blocks and
+    then fails, and the open snapshots hold xmin back so VACUUM reclaims
+    nothing.
+
+    Deliberately does NOT use the `client` fixture. That fixture overrides
+    get_db to hand back the test's own already-checked-out session, which
+    would mask the leak entirely -- the buggy endpoint would borrow a
+    connection the baseline already counted. Everything here goes through
+    the real get_db, against hard-committed rows.
+
+    Reads one backlog event before measuring, which is the synchronisation
+    point: the generator cannot have emitted it without having finished the
+    backlog read, so by then the session must already be closed.
+    """
+    from app.db.session import get_engine
+    from app.main import app
+
+    engine = get_engine()
+
+    user_id, headers = _hard_committed_stream_login(username="notif-pool")
+    _hard_committed_notification(user_id, title="Backlog")
+
+    transport = _LiveASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as ac:
+        baseline = engine.pool.checkedout()
+        async with ac.stream("GET", "/api/notifications/stream", headers=headers) as response:
+            assert response.status_code == 200
+            lines = response.aiter_lines()
+            replayed = await asyncio.wait_for(_next_event(lines), timeout=5)
+            assert replayed["title"] == "Backlog"
+
+            # The stream is open and has already served its backlog. If it
+            # still owned a session, this would be baseline + 1.
+            assert engine.pool.checkedout() == baseline, (
+                "the open SSE stream is pinning a pooled connection"
+            )
+
+
+def _hard_committed_stream_login(*, username: str, role: Role = Role.EMPLOYEE) -> tuple[uuid.UUID, dict]:
+    """`_hard_committed_login` without the `client` fixture, whose get_db
+    override is exactly what the pool test above must avoid installing.
+    Mints the access token through the same `create_access_token` the login
+    endpoint uses rather than replaying the HTTP login, since the point
+    under test is the stream endpoint, not auth."""
+    from app.auth.security import create_access_token, hash_password
+
+    unique = f"{username}-{uuid.uuid4().hex[:8]}"
+    Session = get_sessionmaker()
+    with Session() as hard_session:
+        user = User(
+            username=unique, email=f"{unique}@northstar.example", full_name=username.title(),
+            password_hash=hash_password("Passw0rd!dev"), role=role,
+        )
+        hard_session.add(user)
+        hard_session.commit()
+        user_id = user.id
+    _hard_committed_user_ids.append(user_id)
+
+    token = create_access_token({
+        "kind": "user", "user_id": str(user_id), "role": role.value, "sub": unique,
+    })
+    return user_id, {"Authorization": f"Bearer {token}"}
 
 
 async def _next_event(lines) -> dict:

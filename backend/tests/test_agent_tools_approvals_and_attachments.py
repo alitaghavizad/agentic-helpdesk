@@ -30,6 +30,81 @@ async def test_create_approval_request_handler_files_a_pending_request(db_sessio
     assert "request_number" in result
 
 
+def _task_in_its_own_conversation(db_session):
+    """Task.classified_by_run_id is a NOT NULL FK to runs, so a Task cannot
+    be built in isolation -- same chain conftest's make_ticket builds, and
+    for the same reason. Returns (conversation, task)."""
+    from app.db.models import Run, RunStatus, RunTrigger, Severity, Task, TaskCategory
+
+    conv = Conversation(guest_name="Guest", guest_email="owner@example.com")
+    db_session.add(conv)
+    run = Run(trigger=RunTrigger.CHAT_TURN, status=RunStatus.OK)
+    db_session.add(run)
+    db_session.commit()
+
+    task = Task(
+        conversation_id=conv.id, user_id=None, guest_email="owner@example.com",
+        title="t", category=TaskCategory.VPN_NETWORK, severity=Severity.MEDIUM, summary="s",
+        affected_systems=[], evidence={}, classified_by_run_id=run.id,
+    )
+    db_session.add(task)
+    db_session.commit()
+    return conv, task
+
+
+async def test_create_approval_request_handler_accepts_a_task_from_this_conversation(db_session):
+    conv, task = _task_in_its_own_conversation(db_session)
+
+    args = CreateApprovalRequestArgs(
+        action_type="send_email", action_payload={"to": "hr@northstar.example"},
+        justification="j", risk_level="low", agent_summary="a", task_id=str(task.id),
+    )
+    result = await create_approval_request_handler(_GUEST, db_session, args, conversation_id=conv.id)
+    assert result["status"] == "pending"
+
+    from app.db.models import ApprovalRequest
+    row = db_session.query(ApprovalRequest).filter(ApprovalRequest.task_id == task.id).one()
+    assert row.conversation_id == conv.id
+
+
+async def test_create_approval_request_handler_rejects_another_conversations_task(db_session):
+    """task_id is model-supplied while conversation_id is threaded in by
+    dispatch_tool and cannot be influenced by the model. Unchecked, the
+    model could attach its approval request to a task belonging to a
+    conversation it has nothing to do with. tickets.service.create_ticket
+    already refuses exactly this; the two must agree."""
+    from app.db.models import ApprovalRequest
+
+    _owner_conv, task = _task_in_its_own_conversation(db_session)
+    other = Conversation(guest_name="Guest", guest_email="other@example.com")
+    db_session.add(other)
+    db_session.commit()
+
+    args = CreateApprovalRequestArgs(
+        action_type="send_email", action_payload={"to": "hr@northstar.example"},
+        justification="j", risk_level="low", agent_summary="a", task_id=str(task.id),
+    )
+    result = await create_approval_request_handler(_GUEST, db_session, args, conversation_id=other.id)
+
+    assert result["is_error"] is True
+    assert "does not belong to conversation" in result["content"]
+    assert db_session.query(ApprovalRequest).filter(ApprovalRequest.task_id == task.id).count() == 0
+
+
+async def test_create_approval_request_handler_rejects_a_task_that_does_not_exist(db_session):
+    conv = Conversation(guest_name="Guest", guest_email="g@example.com")
+    db_session.add(conv)
+    db_session.commit()
+
+    args = CreateApprovalRequestArgs(
+        action_type="send_email", action_payload={"to": "hr@northstar.example"},
+        justification="j", risk_level="low", agent_summary="a", task_id=str(uuid.uuid4()),
+    )
+    result = await create_approval_request_handler(_GUEST, db_session, args, conversation_id=conv.id)
+    assert result["is_error"] is True
+    assert "does not exist" in result["content"]
+
+
 async def test_request_attachment_handler_returns_signal_without_touching_db(db_session):
     """A guest has no `users` row to notify -- notify() returns None for a
     None user_id (spec 5.1), so this stays a pure signal with no DB write."""

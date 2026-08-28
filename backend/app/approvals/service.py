@@ -46,7 +46,41 @@ class NotPending(RuntimeError):
 
 
 def get(db: Session, request_id: uuid.UUID) -> ApprovalRequest | None:
+    """Plain, unlocked read for read-only callers (listing, the router's
+    existence check). Never use this to load a row you are about to decide
+    on -- see `_load_for_decision`."""
     return db.query(ApprovalRequest).filter(ApprovalRequest.id == request_id).one_or_none()
+
+
+def _load_for_decision(db: Session, request_id: uuid.UUID) -> ApprovalRequest | None:
+    """Loads the row with `SELECT ... FOR UPDATE`, so the status check in
+    `decide()` and the UPDATE that follows it are one atomic step.
+
+    A plain read is NOT enough, and the difference is a double execution,
+    not a cosmetic race. With an unlocked SELECT two concurrent decisions --
+    a double-clicked Approve button, or a proxy retrying the POST -- both
+    read `pending`, both pass the Python-side guard, and then serialize only
+    at the UPDATE. The second one blocks on the row lock the first took
+    implicitly, and once the first commits it simply proceeds: nothing
+    re-evaluates the status it read before waiting. Reproduced as two real
+    SMTP sends and two `outbound_emails` rows for one approval.
+
+    Taking the lock on the SELECT instead makes the loser wait BEFORE it
+    reads, so under READ COMMITTED it re-reads the winner's committed row,
+    sees a non-pending status, and raises NotPending -> HTTP 409.
+
+    `populate_existing()` is not optional. Without it a row already in this
+    session's identity map is returned with its stale attribute values even
+    though the lock was taken, which would re-open exactly the hole the
+    lock closes.
+    """
+    return (
+        db.query(ApprovalRequest)
+        .filter(ApprovalRequest.id == request_id)
+        .populate_existing()
+        .with_for_update()
+        .one_or_none()
+    )
 
 
 def list_for_admin(db: Session, *, status: ApprovalStatus | None = None) -> list[ApprovalRequest]:
@@ -78,6 +112,12 @@ def decide(
     side effects, and its notification are one atomic unit. A failed
     execution is still committed: `failed` with a recorded reason is the
     correct outcome, not a reason to forget the decision happened.
+
+    That single commit is also what releases the row lock taken by
+    `_load_for_decision`, which is why the whole execution -- SMTP send
+    included -- happens with the approval row locked. A concurrent decision
+    on the SAME approval waits; decisions on different approvals are
+    unaffected, because the lock is per row.
     """
     from datetime import datetime, timezone
 
@@ -87,7 +127,7 @@ def decide(
     from app.notifications import service as notifications
     from app.tracing import spans
 
-    request = get(db, request_id)
+    request = _load_for_decision(db, request_id)
     if request is None:
         raise LookupError(f"no approval request with id {request_id}")
     if request.status is not ApprovalStatus.PENDING:
