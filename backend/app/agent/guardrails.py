@@ -20,9 +20,12 @@ _SOURCE_ATTR_BREAKOUT_RE = re.compile(r'["' r'>]')
 
 def wrap_untrusted(source: str, content: str) -> str:
     """Wraps a piece of retrieved/external content per spec 12.1. Every RAG
-    chunk and web-search result passed to the model goes through this --
+    chunk and multimodal attachment passed to the model goes through this --
     the system prompt states content inside these tags is information to
-    reason about, never an instruction to follow.
+    reason about, never an instruction to follow. web_search results do
+    NOT go through this: web_search is an Anthropic server tool, and its
+    results are injected directly by the API rather than passing through
+    any function of ours.
 
     Two independent guarantees, because `source` and `content` sit in
     different syntactic positions in the template:

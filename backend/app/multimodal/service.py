@@ -67,7 +67,11 @@ def store_and_parse(
         # content-addressed, so a truncated file from an interrupted write
         # would be pinned forever: every later upload of those bytes sees the
         # path exists and skips it. os.replace is atomic on Windows and POSIX.
-        temporary = destination.with_suffix(".partial")
+        # Unique per writer, not per content. A name derived from the hash is
+        # shared by every concurrent upload of the same bytes, so one writer's
+        # os.replace pulls the file out from under the others and they die with
+        # FileNotFoundError -- after the parse has already been paid for.
+        temporary = destination.parent / f"{sha256}.{uuid.uuid4().hex}.partial"
         temporary.write_bytes(data)
         os.replace(temporary, destination)
 

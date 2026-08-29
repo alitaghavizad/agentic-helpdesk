@@ -3,10 +3,15 @@ screenshot is extracted and inert.
 
 WHICH HALF PROVES WHAT: a stubbed Gemini client cannot prove that Gemini parses
 an image, a PDF, or an audio file -- it only proves the pipeline around it. The
-"each parse" clause is met by tests/test_multimodal_live.py, and the phase
-report must cite that, not this file. What this file proves is everything that
-is ours: validation, storage, binding, wrapping, and inertness. Redaction is
-proven in tests/test_multimodal_service.py
+"each parse" clause is met by tests/test_multimodal_live.py for image and PDF,
+and the phase report must cite that, not this file. Audio is not fully met by
+either half: the live audio test (test_a_real_audio_file_round_trips_through_
+the_api) proves only that the call round-trips through the API -- its fixture
+is a silent WAV, and the live run showed Gemini fabricating a transcript for it
+rather than reporting emptiness, so transcription accuracy for audio remains
+unverified. What this file proves is everything that is ours: validation,
+storage, binding, wrapping, and inertness. Redaction is proven in
+tests/test_multimodal_service.py
 (test_parsed_text_is_redacted_before_persistence), not here -- this file never
 asserts anything about redaction's effect, so it should not claim credit for
 that coverage.

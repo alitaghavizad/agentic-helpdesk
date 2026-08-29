@@ -223,10 +223,14 @@ The default suite must cost nothing, so it uses a stubbed Gemini client.
 
 **Which half proves what, stated plainly:** a stub cannot prove that Gemini parses
 an image, a PDF, or an audio file — it only proves the pipeline around it. The
-gate's "image, PDF, and audio each parse" clause is therefore met by the LIVE run,
-and the phase report must say so rather than citing the offline suite as evidence
-of parsing. The offline tests prove everything that is ours: validation, storage,
-binding, wrapping, redaction, authorization, and inertness.
+gate's "image, PDF, and audio each parse" clause is met by the LIVE run for image
+and PDF only. Audio is not: the live audio fixture (sample_voice.wav) is silent,
+and the live run showed Gemini fabricating a transcript for it rather than
+reporting emptiness, so the live audio test proves only that the call
+round-trips through the API — transcription accuracy for audio is unverified.
+The phase report must say so rather than citing either half as evidence that
+audio parsing works. The offline tests prove everything that is ours:
+validation, storage, binding, wrapping, redaction, authorization, and inertness.
 
 **Inertness is tested offline, and that is the correct place for it.** Inertness
 is a property of what happens *after* extraction, so the test stubs extraction to

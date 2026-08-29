@@ -1,9 +1,15 @@
 """Makes REAL Gemini calls. Excluded from the default run -- `uv run python
 tasks.py test` costs nothing and calls nothing.
 
-This is the half of the phase 7 gate that actually proves parsing. The offline
-gate proves our pipeline; only this proves that an image, a PDF, and an audio
-file are genuinely extracted.
+This is the half of the phase 7 gate that actually proves parsing -- for image
+and PDF. The offline gate proves our pipeline; only this proves that an image
+and a PDF are genuinely extracted.
+
+Audio is not proven the same way. sample_voice.wav is 48,000 bytes of silence,
+and a live run showed Gemini fabricating a transcript for it rather than
+reporting emptiness, so test_a_real_audio_file_round_trips_through_the_api
+(below) proves only that the call reaches Gemini and comes back with a
+well-formed response -- transcription accuracy for audio remains unverified.
 """
 from __future__ import annotations
 
@@ -75,7 +81,7 @@ def test_a_real_pdf_parses():
     print(f"\nPDF ->\n{result.text[:500]}")
 
 
-def test_a_real_audio_file_parses():
+def test_a_real_audio_file_round_trips_through_the_api():
     """sample_voice.wav is a generated silent clip -- no spoken recording was
     available in this environment (brief Step 4). A silent input has no
     speech to transcribe, and app/multimodal/gemini.py raises

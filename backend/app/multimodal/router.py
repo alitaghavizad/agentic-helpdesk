@@ -16,7 +16,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 
 from app.chat.service import get_conversation
-from app.db.models import Attachment, Conversation, Role
+from app.db.models import Attachment, Role
 from app.deps import CurrentPrincipal, DbSession
 from app.multimodal import gemini, service, validation
 
@@ -113,15 +113,9 @@ def get_attachment(
 
 
 def _may_read(db, principal, row: Attachment) -> bool:
+    """Delegates to the single tested implementation rather than restating
+    it. An attachment is readable exactly when its conversation is, and two
+    copies of that rule drift -- these two already had."""
     if principal.role == Role.ADMIN.value:
         return True
-    conversation = db.query(Conversation).filter(Conversation.id == row.conversation_id).one_or_none()
-    if conversation is None:
-        return False
-    if principal.kind == "user" and conversation.user_id is not None:
-        return str(conversation.user_id) == principal.user_id
-    if principal.kind == "guest" and conversation.guest_email:
-        # The guest identity comes from the verified JWT, never from a
-        # request parameter (spec 6.1).
-        return conversation.guest_email == principal.guest_email
-    return False
+    return get_conversation(db, principal, row.conversation_id) is not None

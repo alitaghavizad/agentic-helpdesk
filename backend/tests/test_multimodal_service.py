@@ -4,7 +4,7 @@ import hashlib
 
 import pytest
 
-from app.db.models import AttachmentKind, Conversation, ParseStatus
+from app.db.models import Attachment, AttachmentKind, Conversation, ParseStatus
 from app.multimodal import gemini, service, validation
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"deadbeef" * 4
@@ -172,6 +172,72 @@ def test_pending_and_bind_are_exactly_once(db_session, storage, conversation, pa
     db_session.flush()
 
     assert service.pending_for_conversation(db_session, conversation.id) == []
+
+
+def test_two_writers_of_identical_bytes_get_different_temp_paths(
+    db_session, storage, conversation, parses_ok, monkeypatch,
+):
+    """Finding 2 (review): the temp file name used to be derived from the
+    content hash alone (`destination.with_suffix(".partial")`), so two
+    concurrent uploads of identical bytes shared one temp path. Whichever
+    writer's os.replace ran second found the file already moved away by the
+    first and raised FileNotFoundError, escaping store_and_parse as a 500
+    AFTER the (billed) Gemini parse had already run, with no row written.
+
+    A real thread race was tried first and rejected: forcing the two
+    os.replace calls to overlap via a barrier (so the race isn't a timing
+    gamble) reliably reproduced the FileNotFoundError under the old code,
+    but under the FIX it intermittently raised `PermissionError: Access is
+    denied` instead of succeeding -- a separate, pre-existing Windows quirk
+    where os.replace can fail if two threads call it at the exact same
+    instant against the same destination, regardless of whether their
+    sources differ. That is orthogonal to this fix (it is about the
+    destination, not the source-path collision Finding 2 is about) and out
+    of scope here, but it makes a live thread race an unreliable way to
+    prove this particular fix -- exactly the flakiness this project's
+    tests avoid.
+
+    So this proves the fix directly and deterministically instead: two
+    sequential calls that each believe the file doesn't exist yet (Path.exists
+    is pinned to False for the destination, simulating what both racing
+    writers would see BEFORE either one's replace has run) must generate two
+    different temp source paths. With the old hash-only name they would be
+    identical; with the fix they cannot be, because uuid4 is per-call.
+    """
+    sha256 = hashlib.sha256(PNG).hexdigest()
+    destination = storage / validation.storage_relpath(sha256)
+
+    from pathlib import Path
+
+    original_exists = Path.exists
+
+    def _destination_never_exists(self):
+        if self == destination:
+            return False
+        return original_exists(self)
+
+    monkeypatch.setattr(Path, "exists", _destination_never_exists)
+
+    temp_names = []
+    real_replace = service.os.replace
+
+    def _spy_replace(src, dst):
+        temp_names.append(Path(src).name)
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(service.os, "replace", _spy_replace)
+
+    for label in ("first", "second"):
+        service.store_and_parse(
+            db_session, conversation_id=conversation.id, uploader_user_id=None,
+            filename=f"{label}.png", declared_mime="image/png", data=PNG,
+        )
+
+    assert len(temp_names) == 2, "both calls must believe they need to write (that's the scenario being simulated)"
+    assert temp_names[0] != temp_names[1], (
+        "two writers of identical bytes must not be able to share a temp path -- "
+        "this is exactly what a hash-only temp name (destination.with_suffix('.partial')) produces"
+    )
 
 
 def test_a_failed_parse_is_never_pending_for_injection(db_session, storage, conversation, monkeypatch):

@@ -142,8 +142,10 @@ failing the request with a 500.
 
 **Reaching the agent.** A parsed attachment's text is injected into the
 model's next turn wrapped in `<untrusted_data source="..." trust="none">`
-— the same boundary RAG chunks and web-search results go through (spec
-12.1). The agent never sees raw pixels, audio, or PDF bytes, only the text
+— the same boundary RAG chunks go through (spec 12.1). Web-search results
+do not go through this boundary: `web_search` is an Anthropic server tool
+whose results are injected directly by the API, never passing through our
+code. The agent never sees raw pixels, audio, or PDF bytes, only the text
 Gemini extracted, and only as untrusted data a user-role content block can
 carry — never as a system instruction. A file that appears to contain
 instructions is still transcribed faithfully (the extraction is not
@@ -151,6 +153,8 @@ censored) and still flagged if it matches an injection heuristic, but it
 can never act as one.
 
 **No `GEMINI_API_KEY` configured.** Uploads are refused with `503` before
-any file is read or stored, and the `request_attachment` tool disappears
-from the agent's tool catalog entirely rather than being offered and then
-failing.
+any file is stored, and the `request_attachment` tool disappears from the
+agent's tool catalog entirely rather than being offered and then failing.
+(FastAPI still parses and spools the full multipart body first, the same as
+it does for every upload — the `503` is only guaranteed before our own
+attachment store is touched.)
