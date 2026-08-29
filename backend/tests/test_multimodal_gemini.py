@@ -127,6 +127,48 @@ def test_a_client_construction_failure_surfaces_as_gemini_unavailable(monkeypatc
         cleanup_run(handle.run_id)
 
 
+class FakeNotFoundError(Exception):
+    """Shaped like google.genai.errors.ClientError for a retired model: a
+    404 status code and a NOT_FOUND status string as real attributes, which
+    is how the real SDK exposes it (verified directly against the live API
+    for a retired `gemini-2.5-flash`)."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.code = 404
+        self.status = "NOT_FOUND"
+
+
+def test_a_404_shaped_failure_names_the_configured_model(monkeypatch, cleanup_run):
+    """`_check_model_once` only checks list membership, which does not
+    guarantee a model is callable -- Gemini has been observed serving
+    generateContent in a retired model's supported_actions while a real
+    call 404s. When that happens, the diagnostic must name the configured
+    GEMINI_MODEL so it is obvious which setting to fix, not just echo the
+    SDK's generic error text."""
+    from app.config import get_settings
+    from app.tracing.spans import end_run, start_run
+
+    configured_model = get_settings().gemini_model
+    monkeypatch.setattr(gemini, "is_configured", lambda: True)
+    monkeypatch.setattr(
+        gemini, "_client",
+        FakeClient(raises=FakeNotFoundError(
+            f"404 NOT_FOUND. This model models/{configured_model} is no longer available",
+        )),
+    )
+    handle = start_run(RunTrigger.CHAT_TURN)
+    try:
+        with pytest.raises(gemini.GeminiUnavailable) as excinfo:
+            gemini.parse(b"fake", mime_type="image/png", kind=AttachmentKind.IMAGE)
+        message = str(excinfo.value)
+        assert configured_model in message
+        assert "GEMINI_MODEL" in message
+    finally:
+        end_run(handle, status=RunStatus.ERROR)
+        cleanup_run(handle.run_id)
+
+
 def test_an_empty_response_is_an_error_not_silent_success(monkeypatch, cleanup_run):
     """A model that returns nothing has not parsed the file. Returning ''
     would store an empty parsed_text as though it succeeded."""

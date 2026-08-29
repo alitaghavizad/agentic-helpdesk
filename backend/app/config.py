@@ -15,7 +15,7 @@ class Settings(BaseSettings):
 
     anthropic_api_key: str = ""
     gemini_api_key: str = ""
-    gemini_model: str = "gemini-2.5-flash"
+    gemini_model: str = "gemini-3.5-flash"
 
     # Default is already covered by .gitignore's `storage/uploads/`, so stored
     # files can never become untracked working-tree noise. Tests point this at

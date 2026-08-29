@@ -77,7 +77,17 @@ def _get_client():
 def _check_model_once(client) -> None:
     """Spec 20 wants a drifted model id noticed rather than silently
     producing wrong numbers. Logged, never raised: an unlistable model is
-    not a reason to refuse a parse that might well succeed."""
+    not a reason to refuse a parse that might well succeed.
+
+    Honesty check: list membership does NOT guarantee the model is callable.
+    Gemini has served `generateContent` in a model's `supported_actions`
+    while `generate_content` on that same id returns 404 NOT_FOUND for
+    retired models still left in the listing (measured directly against
+    `gemini-2.5-flash`, 2026-08). This function cannot catch that class of
+    drift -- doing so would require an actual generation call, which costs
+    money on every boot and is deliberately not done here. The 404-shaped
+    diagnostic in `_traced_parse`'s except-block is what surfaces that
+    failure, at parse time, when it actually happens."""
     global _model_checked
     if _model_checked:
         return
@@ -92,6 +102,30 @@ def _check_model_once(client) -> None:
             )
     except Exception:  # noqa: BLE001 -- advisory only
         logger.warning("could not verify GEMINI_MODEL %r against the live listing", configured)
+
+
+def _describe_failure(exc: Exception, model: str) -> str:
+    """Builds the GeminiUnavailable message. A transport failure shaped like
+    404/NOT_FOUND gets a pointed diagnostic naming the configured model,
+    because that is exactly the failure `_check_model_once` cannot catch:
+    Gemini has been observed serving a model in `models.list()` with
+    `generateContent` in its `supported_actions` while a real call to that
+    same id returns 404 -- the model was retired out from under the listing.
+    Anything else keeps the plain `Type: message` form other callers already
+    depend on."""
+    base = f"{type(exc).__name__}: {exc}"
+    code = getattr(exc, "code", None)
+    status = str(getattr(exc, "status", "") or "").upper()
+    looks_like_missing_model = (
+        code == 404 or "NOT_FOUND" in status or "404" in base or "not found" in base.lower()
+    )
+    if looks_like_missing_model:
+        return (
+            f"{base} -- the configured GEMINI_MODEL {model!r} may no longer be served "
+            "by the Gemini API even though it can still appear in models.list(); "
+            "check the current model listing and update GEMINI_MODEL if so."
+        )
+    return base
 
 
 def parse(data: bytes, *, mime_type: str, kind: AttachmentKind) -> ParseResult:
@@ -123,7 +157,7 @@ def _traced_parse(data: bytes, *, mime_type: str, kind: AttachmentKind) -> Parse
             contents=[types.Part.from_bytes(data=data, mime_type=mime_type), PROMPTS[kind]],
         )
     except Exception as exc:  # noqa: BLE001 -- recorded on the attachment, never raised at the uploader
-        raise GeminiUnavailable(f"{type(exc).__name__}: {exc}") from exc
+        raise GeminiUnavailable(_describe_failure(exc, model)) from exc
 
     usage = getattr(response, "usage_metadata", None)
     recorder = current_span()
