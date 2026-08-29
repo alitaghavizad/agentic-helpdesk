@@ -8,6 +8,7 @@ import pytest
 
 from app.agent.registry import TOOLS, dispatch_tool, to_anthropic_tool_params
 from app.db.models import Conversation, Severity, TaskCategory, TicketPriority
+from app.multimodal import gemini
 from app.rbac.policy import Principal
 
 _GUEST = Principal(kind="guest", user_id=None, role="guest", clearance=None, department=None, employee_ref=None, helpdesk_ref=None)
@@ -73,13 +74,20 @@ def test_serialized_tool_catalog_is_strict_with_no_additional_properties():
         assert p.get("strict") is True
 
 
-def test_record_task_and_create_approval_request_are_the_only_non_strict_tools():
+def test_record_task_and_create_approval_request_are_the_only_non_strict_tools(monkeypatch):
     # RecordTaskArgs.evidence and CreateApprovalRequestArgs.action_payload
     # are plain, intentionally open-ended `dict` fields -- Pydantic renders
     # those as a nested `additionalProperties: true`, which strict mode's
     # requirement (every object in the schema, not just the root, must be
     # closed) can never satisfy. Every other custom tool has no such field
     # and must stay strict.
+    #
+    # The count below is pinned to a configured Gemini deliberately:
+    # request_attachment is conditional on gemini.is_configured() (see
+    # app/agent/registry.py), so leaving this to ambient .env state would
+    # make the count wrong -- and this test fail -- on any checkout or CI
+    # runner without a GEMINI_API_KEY set.
+    monkeypatch.setattr(gemini, "is_configured", lambda: True)
     params = to_anthropic_tool_params()
     by_name = {p["name"] if isinstance(p, dict) else p.name: (p if isinstance(p, dict) else p.model_dump()) for p in params}
 
@@ -97,13 +105,17 @@ def test_record_task_and_create_approval_request_are_the_only_non_strict_tools()
         assert by_name[name].get("strict") is True
 
 
-def test_to_anthropic_tool_params_serializes_web_search_exactly_once():
+def test_to_anthropic_tool_params_serializes_web_search_exactly_once(monkeypatch):
     # web_search is both a real ToolSpec in TOOLS (so TOOLS itself satisfies
     # the "all 12 tools" catalog) AND explicitly excluded from the
     # Pydantic-schema loop in to_anthropic_tool_params() in favor of the
     # real server-tool dict appended separately. If a future edit ever
     # dropped that exclusion, web_search would silently serialize twice --
     # once as a broken custom-tool schema, once as the real server tool.
+    #
+    # Pinned to a configured Gemini for the same reason as the test above:
+    # the "12" count includes the conditional request_attachment tool.
+    monkeypatch.setattr(gemini, "is_configured", lambda: True)
     params = to_anthropic_tool_params()
     names = [p["name"] if isinstance(p, dict) else p.name for p in params]
     assert len(names) == 12

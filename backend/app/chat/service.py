@@ -59,3 +59,14 @@ def append_message(db: Session, conversation_id: uuid.UUID, role: MessageRole, c
     db.commit()
     db.refresh(message)
     return message
+
+
+def stage_message(db: Session, conversation_id: uuid.UUID, role: MessageRole, content: list | dict, run_id: uuid.UUID | None = None) -> Message:
+    """Same as append_message but WITHOUT committing, so a caller that must
+    write the message and something else atomically can do both in one
+    transaction. append_message keeps its commit -- the chat turn path relies
+    on it."""
+    message = Message(conversation_id=conversation_id, role=role, content=content, run_id=run_id)
+    db.add(message)
+    db.flush()
+    return message
