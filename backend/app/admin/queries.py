@@ -307,3 +307,43 @@ def list_audit(
         .limit(limit).offset(offset).all()
     )
     return Page(items=items, total=int(total), limit=limit, offset=offset)
+
+
+def list_users(db: Session, *, limit: int | None = None, offset: int | None = None) -> Page:
+    """Ordered by username, which is both the only ordering an admin scanning
+    a directory can navigate and -- because `users.username` carries a UNIQUE
+    constraint -- a total order. That matters more than aesthetics: a sort key
+    with ties falls through to physical row order, and `offset` then silently
+    returns overlapping or skipped pages. No second tiebreaker is needed here
+    for exactly that reason.
+
+    Every user is listed, inactive ones included. `is_active` is in the
+    payload so the panel can mark them; filtering them out would hide the
+    accounts an admin most often needs to find."""
+    limit, offset = clamp_limit(limit), clamp_offset(offset)
+    total = db.query(func.count(User.id)).scalar() or 0
+    items = db.query(User).order_by(User.username.asc()).limit(limit).offset(offset).all()
+    return Page(items=items, total=int(total), limit=limit, offset=offset)
+
+
+def list_lessons(db: Session, *, limit: int | None = None, offset: int | None = None) -> Page:
+    """Newest first, with the `id` tiebreaker for the same reason as
+    `list_runs`: `lessons.created_at` is the column's `func.now()` server
+    default, which is TRANSACTION-start time, so a batch of lessons written by
+    one run all share a byte-identical timestamp and the pager would otherwise
+    have no stable second key.
+
+    ARCHIVED lessons are deliberately NOT filtered out. Spec 4.2 makes DELETE
+    an archive precisely so the record survives review; a list that hid
+    archived rows would make the withdrawn lesson -- the one an admin is most
+    likely to be looking for -- the only one they could not find."""
+    from app.db.models import Lesson
+
+    limit, offset = clamp_limit(limit), clamp_offset(offset)
+    total = db.query(func.count(Lesson.id)).scalar() or 0
+    items = (
+        db.query(Lesson)
+        .order_by(Lesson.created_at.desc(), Lesson.id.desc())
+        .limit(limit).offset(offset).all()
+    )
+    return Page(items=items, total=int(total), limit=limit, offset=offset)

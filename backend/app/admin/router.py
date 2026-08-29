@@ -18,7 +18,10 @@ from pydantic import BaseModel
 
 from app.admin import queries
 from app.approvals import service as approvals
-from app.db.models import ApprovalStatus
+from app.audit.service import record_audit
+from app.db.models import (
+    ActorType, ApprovalStatus, Clearance, Lesson, LessonStatus, Role, User,
+)
 from app.deps import DbSession, require_role
 from app.rbac.policy import Principal
 from app.tracing.store import trace_tree
@@ -222,3 +225,197 @@ def admin_audit(
         } for a in page.items],
         total=page.total, limit=page.limit, offset=page.offset,
     )
+
+
+# ---- Mutating endpoints: users and lessons (spec 14, 4.2) --------------------------
+
+class UserPatch(BaseModel):
+    """Role and clearance, and nothing else.
+
+    `extra: "ignore"` is Pydantic's default, but it is stated explicitly
+    because it is load-bearing here rather than incidental: it is what turns
+    an attempt to smuggle `password_hash`, `username` or `id` through this
+    route into a no-op instead of a privilege escalation that no audit row
+    would explain. tests/test_admin_mutations.py exercises it directly, so
+    the behaviour cannot be changed silently.
+
+    Both fields are optional and an omitted one means "leave it alone", not
+    "set it to null" -- a PATCH that cleared clearance on every role change
+    would quietly demote privileged accounts. The enum types do the
+    validation: an unknown role is a 422 before the handler runs, so the row
+    is never touched.
+    """
+    model_config = {"extra": "ignore"}
+    role: Role | None = None
+    clearance: Clearance | None = None
+
+
+class LessonPatch(BaseModel):
+    """Content, title and status. Not `category`, `file_path`, `ticket_id` or
+    `created_by_run_id`: those are the lesson's provenance, the chain that
+    makes it auditable at all, and an admin correcting the text of a lesson
+    must not be able to re-attribute it to a different ticket or run."""
+    model_config = {"extra": "ignore"}
+    content_md: str | None = None
+    title: str | None = None
+    status: LessonStatus | None = None
+
+
+@router.get("/users", response_model=PageResponse)
+def admin_users(
+    principal: AdminPrincipal, db: DbSession, limit: int | None = None, offset: int | None = None,
+) -> PageResponse:
+    """The payload is an explicit dict rather than a dump of the row, so a
+    column cannot join the API by being added to the table -- `password_hash`
+    sits on the same object."""
+    page = queries.list_users(db, limit=limit, offset=offset)
+    return PageResponse(
+        items=[{
+            "id": str(u.id), "username": u.username, "email": u.email,
+            "full_name": u.full_name, "role": u.role.value,
+            "clearance": u.clearance.value if u.clearance else None,
+            "department": u.department, "employee_ref": u.employee_ref,
+            "helpdesk_ref": u.helpdesk_ref, "is_active": u.is_active,
+            # The 125 accounts seeded from the EMP-xxx and HD-xxx profiles all
+            # share SEED_USER_PASSWORD (spec 5.6 item 4), so the panel marks
+            # them rather than implying they are real accounts with real
+            # credentials. `employee_ref`/`helpdesk_ref` is the derivation
+            # because app/db/seed.py sets those columns on exactly those two
+            # populations and on nothing else.
+            #
+            # The `admin` account is NOT flagged, deliberately: seed.py builds
+            # it from ADMIN_PASSWORD (item 1), not the shared password, so a
+            # badge saying otherwise would be false about the one account
+            # whose credentials matter most. "Seeded" and "shares the dev
+            # password" differ by exactly that row, and this flag means the
+            # second. (Measured: 125 of the 126 seeded users.)
+            "dev_seed": u.employee_ref is not None or u.helpdesk_ref is not None,
+        } for u in page.items],
+        total=page.total, limit=page.limit, offset=page.offset,
+    )
+
+
+@router.patch("/users/{user_id}")
+def admin_patch_user(
+    user_id: uuid.UUID, payload: UserPatch, principal: AdminPrincipal, db: DbSession,
+) -> dict:
+    """Changes role and/or clearance and audits the change.
+
+    The mutation and its `audit_log` row share ONE transaction: the change is
+    flushed, `record_audit` stages and flushes its row (it never commits --
+    see app/audit/service.py), and a single `db.commit()` at the end makes
+    both durable together. An audit entry that survived a rolled-back
+    mutation would be a forensic lie, and one lost while the mutation stuck
+    would be a silent gap; neither is possible while there is exactly one
+    commit. tests/test_admin_mutations.py injects a failure after the audit
+    row is staged and proves nothing survives.
+
+    The previous values go into the payload as well as the new ones: an audit
+    row saying only what a field became cannot answer "what changed", which
+    is the question the table exists for.
+    """
+    user = db.query(User).filter(User.id == user_id).one_or_none()
+    if user is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "no such user")
+
+    previous = {
+        "previous_role": user.role.value,
+        "previous_clearance": user.clearance.value if user.clearance else None,
+    }
+    if payload.role is not None:
+        user.role = payload.role
+    if payload.clearance is not None:
+        user.clearance = payload.clearance
+    db.flush()
+
+    record_audit(
+        db, actor_type=ActorType.USER, actor_id=principal.user_id,
+        action="user.updated", target_type="user", target_id=str(user.id),
+        payload={
+            **previous,
+            "new_role": user.role.value,
+            "new_clearance": user.clearance.value if user.clearance else None,
+        },
+    )
+    db.commit()
+    return {
+        "id": str(user.id), "role": user.role.value,
+        "clearance": user.clearance.value if user.clearance else None,
+    }
+
+
+@router.get("/lessons", response_model=PageResponse)
+def admin_lessons(
+    principal: AdminPrincipal, db: DbSession, limit: int | None = None, offset: int | None = None,
+) -> PageResponse:
+    page = queries.list_lessons(db, limit=limit, offset=offset)
+    return PageResponse(
+        items=[{
+            "id": str(lesson.id), "title": lesson.title, "category": lesson.category,
+            "content_md": lesson.content_md, "status": lesson.status.value,
+            "confidence": lesson.confidence.value,
+            "ticket_id": str(lesson.ticket_id) if lesson.ticket_id else None,
+            "created_at": lesson.created_at.isoformat() if lesson.created_at else None,
+        } for lesson in page.items],
+        total=page.total, limit=page.limit, offset=page.offset,
+    )
+
+
+@router.patch("/lessons/{lesson_id}")
+def admin_patch_lesson(
+    lesson_id: uuid.UUID, payload: LessonPatch, principal: AdminPrincipal, db: DbSession,
+) -> dict:
+    """Same single-transaction contract as admin_patch_user: flush the change,
+    stage the audit row, one commit."""
+    lesson = db.query(Lesson).filter(Lesson.id == lesson_id).one_or_none()
+    if lesson is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "no such lesson")
+
+    for field in ("content_md", "title", "status"):
+        value = getattr(payload, field)
+        if value is not None:
+            setattr(lesson, field, value)
+    db.flush()
+
+    record_audit(
+        db, actor_type=ActorType.USER, actor_id=principal.user_id,
+        action="lesson.updated", target_type="lesson", target_id=str(lesson.id),
+        payload={"status": lesson.status.value},
+    )
+    db.commit()
+    return {"id": str(lesson.id), "status": lesson.status.value}
+
+
+@router.delete("/lessons/{lesson_id}")
+def admin_archive_lesson(
+    lesson_id: uuid.UUID, principal: AdminPrincipal, db: DbSession,
+) -> dict:
+    """DELETE archives; it does not remove the row.
+
+    Spec 4.2 and parent spec 20 make lessons archivable so a bad lesson can be
+    withdrawn from retrieval without destroying the record that it existed and
+    was acted on. The row survives, the list keeps returning it, and the audit
+    action says `lesson.archived` rather than `lesson.deleted` for the same
+    reason.
+
+    Repeating the call on an already-archived lesson is idempotent -- 200 and
+    the same body -- rather than a 409. The verb states a desired end state,
+    that end state already holds, and a panel whose delete button errors on a
+    double-click is worse than one that does nothing. The second audit row is
+    NOT suppressed: it records that an admin issued the request, which is true
+    whether or not the row changed, and dropping it because the write was a
+    no-op is how an audit trail starts lying by omission.
+    """
+    lesson = db.query(Lesson).filter(Lesson.id == lesson_id).one_or_none()
+    if lesson is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "no such lesson")
+
+    lesson.status = LessonStatus.ARCHIVED
+    db.flush()
+    record_audit(
+        db, actor_type=ActorType.USER, actor_id=principal.user_id,
+        action="lesson.archived", target_type="lesson", target_id=str(lesson.id),
+        payload={},
+    )
+    db.commit()
+    return {"id": str(lesson.id), "status": lesson.status.value, "archived": True}
