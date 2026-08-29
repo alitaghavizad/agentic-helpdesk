@@ -52,6 +52,45 @@ def _start_of_today() -> datetime:
     return now.replace(hour=0, minute=0, second=0, microsecond=0)
 
 
+# The escape character handed to ILIKE. A single backslash in SQL; doubled
+# here only because it is a Python string escape.
+_LIKE_ESCAPE = "\\"
+
+
+def _contains(term: str) -> str:
+    """Builds a `%term%` ILIKE pattern with the metacharacters neutralised.
+
+    `%`, `_` and `\\` are wildcards to ILIKE, so an unescaped search box does
+    something other than substring search: `q=%` matches every row in the
+    table (a full-table dump from a search field), and `q=P_inter` matches
+    "Printer" because `_` is any-single-character. Both are silent -- the
+    caller gets results, just not the ones they asked for.
+
+    The backslash is escaped FIRST; doing it last would re-escape the
+    backslashes introduced by the `%` and `_` replacements and turn the
+    escapes back into literals."""
+    escaped = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
+
+def _as_utc(value: datetime | None) -> datetime | None:
+    """Normalises a filter bound to an aware UTC datetime.
+
+    Every `*_at` column in this schema is `timestamptz`, but FastAPI parses
+    `?since=2026-08-29T00:00:00` (no offset) into a NAIVE datetime perfectly
+    happily. A naive bind parameter is sent to Postgres without a zone and
+    interpreted in the server session's TimeZone, so the identical request
+    would select a different window depending on how the database happens to
+    be configured. Naive input is therefore DEFINED to mean UTC -- the zone
+    every timestamp this API emits is already in -- rather than being
+    compared against whatever zone the server was started with."""
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
+
+
 def overview(db: Session) -> dict[str, Any]:
     """Spec 15's Overview screen. Every counter is scoped to today except
     the queues (pending approvals, open tickets), which are backlogs and are
@@ -164,11 +203,12 @@ def costs(db: Session) -> dict[str, Any]:
 
 def list_runs(db: Session, *, limit: int | None = None, offset: int | None = None) -> Page:
     """Newest first, which is the only ordering an operator ever wants from a
-    run list. The `id` tiebreaker is not decoration: `started_at` defaults to
-    `func.now()`, which in Postgres is TRANSACTION-start time, so every run
-    opened inside one transaction shares a timestamp exactly. Without a
-    stable second key the sort would fall through to physical row order and
-    `offset` would silently return overlapping or skipped pages."""
+    run list. The `id` tiebreaker is not decoration: without a stable second
+    key the sort would fall through to physical row order and `offset` would
+    silently return overlapping or skipped pages. `started_at` is stamped
+    per run in app/tracing/store.py::insert_run rather than left to the
+    column's `func.now()` server default -- see the comment there -- so ties
+    are now rare, but the pager must not depend on that."""
     limit, offset = clamp_limit(limit), clamp_offset(offset)
     total = db.query(func.count(Run.id)).scalar() or 0
     items = (
@@ -182,18 +222,41 @@ def list_runs(db: Session, *, limit: int | None = None, offset: int | None = Non
 def list_conversations(
     db: Session, *, q: str | None = None, limit: int | None = None, offset: int | None = None,
 ) -> Page:
-    """`q` matches the title OR the guest name, case-insensitively. An admin
-    chasing a conversation remembers one of those; nobody remembers a uuid.
+    """`q` matches the title OR the participant, case-insensitively (spec 4:
+    "searchable by title and participant"). An admin chasing a conversation
+    remembers one of those; nobody remembers a uuid.
+
+    "Participant" needs the join. `conversations` carries a CHECK constraint
+    (`(user_id IS NOT NULL) <> (guest_name IS NOT NULL AND guest_email IS NOT
+    NULL)`) that makes guest_name GUARANTEED NULL whenever user_id is set, so
+    searching guest_name alone can never match a single logged-in user's
+    conversation -- participant search would be 0%-effective for exactly the
+    population the admin panel exists to support. The user's username and
+    full_name come from the joined `users` row; guest_email is searched too
+    because it is the only identifier a guest conversation reliably has.
+
+    The join is an OUTER join: a guest conversation has user_id NULL, and an
+    inner join would silently drop every guest conversation from the
+    unfiltered list as well as from search results.
 
     `total` is the count of MATCHING rows, not of the table -- a search whose
     total ignores its own filter makes the pager lie about how many pages
-    exist."""
+    exist. It is computed from the SAME query object, join included, so the
+    two cannot drift apart."""
     limit, offset = clamp_limit(limit), clamp_offset(offset)
-    query = db.query(Conversation)
-    if q:
-        pattern = f"%{q}%"
+    query = db.query(Conversation).outerjoin(User, Conversation.user_id == User.id)
+    # `q and q.strip()`, deliberately: `?q=` (an empty or whitespace-only
+    # search box) lists the whole table rather than returning nothing. That is
+    # what a search box should do when it is cleared, and spelling it out here
+    # makes it a decision rather than the accidental falsiness of `if q:`.
+    if q and q.strip():
+        pattern = _contains(q)
         query = query.filter(
-            Conversation.title.ilike(pattern) | Conversation.guest_name.ilike(pattern)
+            Conversation.title.ilike(pattern, escape=_LIKE_ESCAPE)
+            | Conversation.guest_name.ilike(pattern, escape=_LIKE_ESCAPE)
+            | Conversation.guest_email.ilike(pattern, escape=_LIKE_ESCAPE)
+            | User.username.ilike(pattern, escape=_LIKE_ESCAPE)
+            | User.full_name.ilike(pattern, escape=_LIKE_ESCAPE)
         )
     total = query.with_entities(func.count(Conversation.id)).scalar() or 0
     items = (
@@ -205,20 +268,39 @@ def list_conversations(
 
 def list_audit(
     db: Session, *, actor_id: str | None = None, action: str | None = None,
-    target_type: str | None = None, limit: int | None = None, offset: int | None = None,
+    target_type: str | None = None, since: datetime | None = None,
+    until: datetime | None = None, limit: int | None = None, offset: int | None = None,
 ) -> Page:
-    """The three filters are exact matches, deliberately. `audit_log` is the
-    append-only record spec 5.4 defines, and an investigator asking "what did
-    actor X do" wants precisely X's rows -- a substring match would silently
-    fold in a different actor whose id happens to contain this one."""
+    """Spec 4: "Filterable by actor, action, target type, date range".
+
+    The three string filters are exact matches, deliberately. `audit_log` is
+    the append-only record spec 5.4 defines, and an investigator asking "what
+    did actor X do" wants precisely X's rows -- a substring match would
+    silently fold in a different actor whose id happens to contain this one.
+
+    `since`/`until` bound `created_at` half-open, [since, until): a row
+    stamped exactly at `since` is INCLUDED and one stamped exactly at `until`
+    is EXCLUDED. That is what makes two adjacent windows (…09:00, 09:00…)
+    tile the timeline exactly -- a closed upper bound would report the row on
+    the boundary in both windows, so paging through a day hour by hour would
+    double-count it."""
     limit, offset = clamp_limit(limit), clamp_offset(offset)
     query = db.query(AuditLog)
-    if actor_id:
+    # `x and x.strip()`, deliberately: an empty or whitespace-only filter
+    # value means "no filter", not "match the empty string". No audit row has
+    # a blank action or target_type, so the alternative reading would return
+    # nothing at all from a cleared filter box. Spelled out rather than left
+    # to the falsiness of `if x:` so it reads as the decision it is.
+    if actor_id and actor_id.strip():
         query = query.filter(AuditLog.actor_id == actor_id)
-    if action:
+    if action and action.strip():
         query = query.filter(AuditLog.action == action)
-    if target_type:
+    if target_type and target_type.strip():
         query = query.filter(AuditLog.target_type == target_type)
+    if since is not None:
+        query = query.filter(AuditLog.created_at >= _as_utc(since))
+    if until is not None:
+        query = query.filter(AuditLog.created_at < _as_utc(until))
     total = query.with_entities(func.count(AuditLog.id)).scalar() or 0
     items = (
         query.order_by(AuditLog.created_at.desc(), AuditLog.id.desc())

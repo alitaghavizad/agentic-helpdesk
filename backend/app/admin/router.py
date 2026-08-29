@@ -10,6 +10,7 @@ these async would silently reintroduce that.
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -200,11 +201,17 @@ def admin_conversations(
 def admin_audit(
     principal: AdminPrincipal, db: DbSession, actor_id: str | None = None,
     action: str | None = None, target_type: str | None = None,
+    since: datetime | None = None, until: datetime | None = None,
     limit: int | None = None, offset: int | None = None,
 ) -> PageResponse:
+    """`since`/`until` are ISO-8601 query params, which FastAPI parses into
+    datetimes natively (and rejects with a 422 when unparseable, which is the
+    right answer for a malformed bound). They bound `created_at` half-open,
+    [since, until); a bound with no offset is read as UTC. See
+    queries.list_audit and queries._as_utc for why on both counts."""
     page = queries.list_audit(
         db, actor_id=actor_id, action=action, target_type=target_type,
-        limit=limit, offset=offset,
+        since=since, until=until, limit=limit, offset=offset,
     )
     return PageResponse(
         items=[{

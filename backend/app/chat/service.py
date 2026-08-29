@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
@@ -11,10 +12,19 @@ from app.rbac.policy import Principal
 def create_conversation(
     db: Session, principal: Principal, *, title: str | None = None, guest_name: str | None = None, guest_email: str | None = None,
 ) -> Conversation:
+    # created_at is set explicitly rather than left to the column's
+    # server_default. Postgres's now() is the TRANSACTION start time, so any
+    # two conversations created inside one transaction would share a
+    # byte-identical created_at and the admin conversation list would fall
+    # through to ordering by a random uuid4.
+    now = datetime.now(timezone.utc)
     if principal.kind == "user":
-        conv = Conversation(user_id=uuid.UUID(principal.user_id), title=title)
+        conv = Conversation(user_id=uuid.UUID(principal.user_id), title=title, created_at=now)
     else:
-        conv = Conversation(guest_name=guest_name or "Guest", guest_email=guest_email, title=title)
+        conv = Conversation(
+            guest_name=guest_name or "Guest", guest_email=guest_email, title=title,
+            created_at=now,
+        )
     db.add(conv)
     db.commit()
     db.refresh(conv)

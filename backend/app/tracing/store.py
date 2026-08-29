@@ -15,7 +15,17 @@ def insert_run(
 ) -> uuid.UUID:
     Session = get_sessionmaker()
     with Session() as session:
-        run = Run(trigger=trigger, status=RunStatus.RUNNING, conversation_id=conversation_id, user_id=user_id)
+        run = Run(
+            trigger=trigger, status=RunStatus.RUNNING,
+            conversation_id=conversation_id, user_id=user_id,
+            # Set explicitly rather than left to the column's server_default.
+            # Postgres's now() is the TRANSACTION start time, so any two runs
+            # opened inside one transaction would share a byte-identical
+            # started_at and the admin run list would fall through to ordering
+            # by a random uuid4. This path commits per run so that is rare
+            # today, but the ordering must not depend on that staying true.
+            started_at=datetime.now(timezone.utc),
+        )
         session.add(run)
         session.commit()
         return run.id
