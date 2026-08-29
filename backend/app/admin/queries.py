@@ -61,6 +61,15 @@ def overview(db: Session) -> dict[str, Any]:
     errors_today = db.query(func.count(Run.id)).filter(
         Run.started_at >= since, Run.status == RunStatus.ERROR,
     ).scalar() or 0
+    # The error-rate denominator, unlike runs_today. A run still RUNNING has
+    # not had the chance to fail yet, so counting it dilutes the rate exactly
+    # when a burst of traffic is in flight -- the moment the number matters
+    # most. ABORTED is deliberately NOT excluded: per app/agent/budget.py it
+    # is a budget cutoff, which is a completed outcome and a real non-error,
+    # so it belongs in the denominator and out of the numerator.
+    completed_today = db.query(func.count(Run.id)).filter(
+        Run.started_at >= since, Run.status != RunStatus.RUNNING,
+    ).scalar() or 0
     spend_today = db.query(func.coalesce(func.sum(Run.cost_usd), 0)).filter(
         Run.started_at >= since,
     ).scalar() or 0
@@ -73,13 +82,15 @@ def overview(db: Session) -> dict[str, Any]:
     ).scalar() or 0
 
     return {
+        # Counts every run including the in-flight ones: this counter
+        # answers "how much happened today", and work in progress happened.
         "runs_today": int(runs_today),
         "spend_today": float(spend_today),
         "pending_approvals": int(pending_approvals),
         "open_tickets": int(open_tickets),
         # Guarded: a fresh install has no runs, and a ZeroDivisionError on
         # the landing screen would be an unusually poor first impression.
-        "error_rate": (errors_today / runs_today) if runs_today else 0.0,
+        "error_rate": (errors_today / completed_today) if completed_today else 0.0,
     }
 
 
@@ -87,11 +98,18 @@ def costs(db: Session) -> dict[str, Any]:
     """Spec 15's Costs screen. Grouped four ways because each answers a
     different question: by day (is spend growing), by model (what is
     expensive), by user (who is driving it), by trigger (which feature)."""
+    # Group by the UTC calendar day, explicitly. Run.started_at is a
+    # timestamptz, so a bare func.date() would render it in whatever the
+    # Postgres session's TimeZone happens to be, while _start_of_today() is
+    # unconditionally UTC -- two panels of the same screen could then
+    # disagree about which day a run belongs to. Pinning both to UTC is what
+    # makes "today" mean one thing.
+    _utc_day = func.date(func.timezone("UTC", Run.started_at))
     by_day = [
         {"day": str(day), "cost_usd": float(total or 0)}
         for day, total in db.query(
-            func.date(Run.started_at), func.coalesce(func.sum(Run.cost_usd), 0),
-        ).group_by(func.date(Run.started_at)).order_by(func.date(Run.started_at)).all()
+            _utc_day, func.coalesce(func.sum(Run.cost_usd), 0),
+        ).group_by(_utc_day).order_by(_utc_day).all()
     ]
     by_trigger = [
         {"trigger": trigger.value, "cost_usd": float(total or 0), "runs": int(count)}
@@ -121,9 +139,12 @@ def costs(db: Session) -> dict[str, Any]:
     ).one()
     input_tokens, output_tokens, cache_read, cache_write, total_cost = totals_row
 
-    # Cache hit rate is cache reads over everything that COULD have been a
-    # cache read -- reads plus fresh input. Guarded for a fresh install.
-    denominator = int(input_tokens) + int(cache_read)
+    # Cache hit rate is cache reads over every prompt-side token processed,
+    # not just reads plus fresh input. Omitting cache WRITES makes a workload
+    # that is establishing a cache -- the first turn of every new
+    # conversation -- report a near-perfect hit rate while barely benefiting
+    # from caching at all. Guarded for a fresh install.
+    denominator = int(input_tokens) + int(cache_read) + int(cache_write)
     return {
         "by_day": by_day,
         "by_model": by_model,

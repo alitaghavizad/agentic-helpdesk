@@ -70,6 +70,56 @@ def test_overview_error_rate_is_a_fraction_of_todays_runs(db_session):
     assert 0.0 <= result["error_rate"] <= 1.0
 
 
+def test_error_rate_excludes_in_flight_runs_from_its_denominator(db_session):
+    """A run that has not finished cannot be an error yet, so counting
+    RUNNING rows in the denominator drags the rate down exactly when a burst
+    of traffic is in flight -- the moment the number matters most. Here one
+    error and one OK run make a true rate of 0.5; the eight in-flight runs
+    would have reported 0.1."""
+    from sqlalchemy import text
+
+    db_session.execute(text("DELETE FROM spans"))
+    db_session.execute(text("DELETE FROM runs"))
+    now = datetime.now(timezone.utc)
+    db_session.add_all([
+        Run(trigger=RunTrigger.CHAT_TURN, status=RunStatus.ERROR, started_at=now),
+        Run(trigger=RunTrigger.CHAT_TURN, status=RunStatus.OK, started_at=now),
+        *[
+            Run(trigger=RunTrigger.CHAT_TURN, status=RunStatus.RUNNING, started_at=now)
+            for _ in range(8)
+        ],
+    ])
+    db_session.flush()
+
+    result = queries.overview(db_session)
+    # runs_today answers "how much happened today", which includes work in
+    # progress -- excluding RUNNING from the RATE must not shrink the COUNT.
+    assert result["runs_today"] == 10
+    assert result["error_rate"] == pytest.approx(0.5)
+
+
+def test_error_rate_counts_aborted_as_a_completed_non_error(db_session):
+    """ABORTED is a budget cutoff (app/agent/budget.py), not a failure: it is
+    a finished outcome, so it belongs in the denominator and out of the
+    numerator. One error and three aborted runs is a rate of 0.25."""
+    from sqlalchemy import text
+
+    db_session.execute(text("DELETE FROM spans"))
+    db_session.execute(text("DELETE FROM runs"))
+    now = datetime.now(timezone.utc)
+    db_session.add_all([
+        Run(trigger=RunTrigger.CHAT_TURN, status=RunStatus.ERROR, started_at=now),
+        *[
+            Run(trigger=RunTrigger.CHAT_TURN, status=RunStatus.ABORTED, started_at=now)
+            for _ in range(3)
+        ],
+    ])
+    db_session.flush()
+
+    result = queries.overview(db_session)
+    assert result["error_rate"] == pytest.approx(0.25)
+
+
 def test_overview_error_rate_is_zero_not_a_crash_when_there_are_no_runs(db_session):
     """Division by zero is the obvious bug in any rate calculation."""
     from sqlalchemy import text
@@ -103,6 +153,40 @@ def test_costs_groups_by_day_model_user_and_trigger(db_session):
         assert key in result, f"missing {key}"
     assert "input_tokens" in result["totals"]
     assert "cache_hit_rate" in result["totals"]
+
+
+def test_cache_hit_rate_counts_cache_writes_in_its_denominator(db_session):
+    """A run that WRITES 900 tokens of cache and reads 100 has a 10% hit
+    rate, not 100%. Excluding writes made cache-establishing workloads look
+    perfectly cached."""
+    from sqlalchemy import text
+
+    db_session.execute(text("DELETE FROM spans"))
+    db_session.execute(text("DELETE FROM runs"))
+    db_session.add(Run(
+        trigger=RunTrigger.CHAT_TURN, status=RunStatus.OK,
+        started_at=datetime.now(timezone.utc),
+        input_tokens=0, output_tokens=50,
+        cache_read_tokens=100, cache_write_tokens=900,
+    ))
+    db_session.flush()
+
+    totals = queries.costs(db_session)["totals"]
+    assert totals["input_tokens"] == 0
+    assert totals["cache_read_tokens"] == 100
+    assert totals["cache_write_tokens"] == 900
+
+    # Derived from the totals the function itself reports, so the assertion
+    # survives any row that leaks into the aggregate rather than silently
+    # becoming vacuous.
+    expected = totals["cache_read_tokens"] / (
+        totals["input_tokens"] + totals["cache_read_tokens"] + totals["cache_write_tokens"]
+    )
+    assert totals["cache_hit_rate"] == pytest.approx(expected)
+    assert totals["cache_hit_rate"] == pytest.approx(0.1)
+    # The old denominator (input + reads only) reported a flat 1.0 here; no
+    # correct denominator that includes the 900 written tokens can reach 0.5.
+    assert totals["cache_hit_rate"] < 0.5
 
 
 def test_cache_hit_rate_is_zero_not_a_crash_with_no_tokens(db_session):
