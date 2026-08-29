@@ -17,7 +17,8 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.db.models import (
-    ApprovalRequest, ApprovalStatus, Run, RunStatus, Span, Ticket, TicketStatus, User,
+    ApprovalRequest, ApprovalStatus, AuditLog, Conversation, Run, RunStatus, Span, Ticket,
+    TicketStatus, User,
 )
 
 MAX_LIMIT = 200
@@ -159,3 +160,68 @@ def costs(db: Session) -> dict[str, Any]:
             "cache_hit_rate": (int(cache_read) / denominator) if denominator else 0.0,
         },
     }
+
+
+def list_runs(db: Session, *, limit: int | None = None, offset: int | None = None) -> Page:
+    """Newest first, which is the only ordering an operator ever wants from a
+    run list. The `id` tiebreaker is not decoration: `started_at` defaults to
+    `func.now()`, which in Postgres is TRANSACTION-start time, so every run
+    opened inside one transaction shares a timestamp exactly. Without a
+    stable second key the sort would fall through to physical row order and
+    `offset` would silently return overlapping or skipped pages."""
+    limit, offset = clamp_limit(limit), clamp_offset(offset)
+    total = db.query(func.count(Run.id)).scalar() or 0
+    items = (
+        db.query(Run)
+        .order_by(Run.started_at.desc(), Run.id.desc())
+        .limit(limit).offset(offset).all()
+    )
+    return Page(items=items, total=int(total), limit=limit, offset=offset)
+
+
+def list_conversations(
+    db: Session, *, q: str | None = None, limit: int | None = None, offset: int | None = None,
+) -> Page:
+    """`q` matches the title OR the guest name, case-insensitively. An admin
+    chasing a conversation remembers one of those; nobody remembers a uuid.
+
+    `total` is the count of MATCHING rows, not of the table -- a search whose
+    total ignores its own filter makes the pager lie about how many pages
+    exist."""
+    limit, offset = clamp_limit(limit), clamp_offset(offset)
+    query = db.query(Conversation)
+    if q:
+        pattern = f"%{q}%"
+        query = query.filter(
+            Conversation.title.ilike(pattern) | Conversation.guest_name.ilike(pattern)
+        )
+    total = query.with_entities(func.count(Conversation.id)).scalar() or 0
+    items = (
+        query.order_by(Conversation.created_at.desc(), Conversation.id.desc())
+        .limit(limit).offset(offset).all()
+    )
+    return Page(items=items, total=int(total), limit=limit, offset=offset)
+
+
+def list_audit(
+    db: Session, *, actor_id: str | None = None, action: str | None = None,
+    target_type: str | None = None, limit: int | None = None, offset: int | None = None,
+) -> Page:
+    """The three filters are exact matches, deliberately. `audit_log` is the
+    append-only record spec 5.4 defines, and an investigator asking "what did
+    actor X do" wants precisely X's rows -- a substring match would silently
+    fold in a different actor whose id happens to contain this one."""
+    limit, offset = clamp_limit(limit), clamp_offset(offset)
+    query = db.query(AuditLog)
+    if actor_id:
+        query = query.filter(AuditLog.actor_id == actor_id)
+    if action:
+        query = query.filter(AuditLog.action == action)
+    if target_type:
+        query = query.filter(AuditLog.target_type == target_type)
+    total = query.with_entities(func.count(AuditLog.id)).scalar() or 0
+    items = (
+        query.order_by(AuditLog.created_at.desc(), AuditLog.id.desc())
+        .limit(limit).offset(offset).all()
+    )
+    return Page(items=items, total=int(total), limit=limit, offset=offset)
