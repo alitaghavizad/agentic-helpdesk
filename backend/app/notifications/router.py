@@ -41,6 +41,7 @@ class NotificationResponse(BaseModel):
     link_type: str | None
     link_id: str | None
     read: bool
+    created_at: str | None
 
 
 def _serialize(row) -> NotificationResponse:
@@ -48,6 +49,7 @@ def _serialize(row) -> NotificationResponse:
         id=str(row.id), type=row.type.value, title=row.title, body=row.body,
         link_type=row.link_type, link_id=str(row.link_id) if row.link_id else None,
         read=row.read_at is not None,
+        created_at=row.created_at.isoformat() if row.created_at else None,
     )
 
 

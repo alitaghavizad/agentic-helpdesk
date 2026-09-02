@@ -5,17 +5,29 @@ import type { Notification } from "../api/endpoints/notifications";
 import { StateBlock } from "./StateBlock";
 
 /**
- * Only a `link_type` this app already has a route for gets turned into a
- * link -- an unrecognized one (or one whose detail page a later task hasn't
- * built yet) renders as plain text instead of a link to a 404.
+ * Only a `link_type` this app already has a real detail route for gets
+ * turned into a link -- none do yet ("ticket" resolves to a placeholder
+ * screen in App.tsx with no per-id route, so it would hit the catch-all
+ * not-found). Every notification renders as plain text until a later task
+ * adds a ticket-detail route, at which point this returns a path for it.
  */
-function pathFor(notification: Notification): string | null {
-  if (!notification.link_type || !notification.link_id) return null;
-  if (notification.link_type === "ticket") return `/tickets/${notification.link_id}`;
+function pathFor(_notification: Notification): string | null {
+  // No `link_type` has a real per-id route yet -- "ticket" resolves to a
+  // Placeholder in App.tsx today. Wire up a case here (e.g. `link_type ===
+  // "ticket" -> "/tickets/${link_id}"`) once a task adds that route.
   return null;
 }
 
-function relativeTime(seconds: number): string {
+/**
+ * `created_at` is real on every row now (backend/app/notifications/router.py
+ * populates it for the REST list the same way it always did for the stream),
+ * so this renders the notification's actual creation time rather than a
+ * client-side proxy for it.
+ */
+function relativeTime(iso: string | null): string {
+  const then = iso ? new Date(iso).getTime() : NaN;
+  if (Number.isNaN(then)) return "—";
+  const seconds = Math.max(0, Math.round((Date.now() - then) / 1000));
   if (seconds < 60) return "just now";
   const minutes = Math.round(seconds / 60);
   if (minutes < 60) return `${minutes}m ago`;
@@ -24,39 +36,10 @@ function relativeTime(seconds: number): string {
   return `${Math.round(hours / 24)}d ago`;
 }
 
-/**
- * `NotificationResponse` (the GET /api/notifications shape) carries no
- * timestamp, and the stream's own timestamp is only ever present on the
- * live/replayed frames, not on rows already sitting in the backlog -- so
- * there is no created-at this component could show consistently for every
- * row. What it shows instead is "how long this notification has been in
- * your feed": the moment each id first entered `items` here, remembered for
- * the life of the component.
- */
-function useReceivedAt(items: Notification[]): Map<string, number> {
-  // State, not a ref mutated during render: this only ever needs to settle
-  // after commit, once per newly-seen id, and updating a ref while
-  // rendering is the pattern React's strict/concurrent modes warn about.
-  const [seenAt, setSeenAt] = useState<Map<string, number>>(new Map());
-  useEffect(() => {
-    const unseen = items.filter((item) => !seenAt.has(item.id));
-    if (unseen.length === 0) return;
-    const now = Date.now();
-    setSeenAt((current) => {
-      const next = new Map(current);
-      for (const item of unseen) next.set(item.id, now);
-      return next;
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [items]);
-  return seenAt;
-}
-
 export function NotificationBell() {
   const { items, unread, markRead } = useNotifications();
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
-  const receivedAt = useReceivedAt(items);
 
   useEffect(() => {
     if (!open) return;
@@ -106,7 +89,6 @@ export function NotificationBell() {
               <ul>
                 {items.map((notification) => {
                   const path = pathFor(notification);
-                  const seenSecondsAgo = Math.max(0, Math.round((Date.now() - (receivedAt.get(notification.id) ?? Date.now())) / 1000));
                   const body = (
                     <div className="flex flex-col gap-0.5 px-3 py-2">
                       <div className="flex items-center justify-between gap-2">
@@ -118,7 +100,7 @@ export function NotificationBell() {
                         )}
                       </div>
                       <p className="text-sm text-slate-600">{notification.body}</p>
-                      <span className="text-xs text-slate-400">{relativeTime(seenSecondsAgo)}</span>
+                      <span className="text-xs text-slate-400">{relativeTime(notification.created_at)}</span>
                     </div>
                   );
                   return (

@@ -1028,6 +1028,8 @@ export interface components {
         NotificationResponse: {
             /** Body */
             body: string;
+            /** Created At */
+            created_at: string | null;
             /** Id */
             id: string;
             /** Link Id */

@@ -143,6 +143,21 @@ def test_listing_returns_this_users_notifications_only(client, db_session):
     assert "Theirs" not in titles
 
 
+def test_listing_includes_created_at(client, db_session):
+    """The stream has always sent `created_at` (both on backlog replay and on
+    a live publish -- app/notifications/router.py and .../service.py). The
+    REST list used to omit it, so the same notification id carried different
+    fields depending on which path delivered it to a client. Regression
+    guard for that gap now that NotificationResponse carries the field too."""
+    mine, headers = _login(client, db_session, username="notif-created-at")
+    service.notify(db_session, user_id=mine.id, type=NotificationType.TICKET_CREATED, title="Mine", body="b")
+    db_session.commit()
+
+    body = client.get("/api/notifications", headers=headers).json()
+    assert len(body) == 1
+    assert body[0]["created_at"] is not None
+
+
 def test_marking_read_sets_read_at(client, db_session):
     mine, headers = _login(client, db_session, username="notif-mark-read")
     row = service.notify(db_session, user_id=mine.id, type=NotificationType.TICKET_RESOLVED, title="T", body="b")

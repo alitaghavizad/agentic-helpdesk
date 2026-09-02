@@ -956,6 +956,17 @@
             "title": "Body",
             "type": "string"
           },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
           "id": {
             "title": "Id",
             "type": "string"
@@ -1002,7 +1013,8 @@
           "body",
           "link_type",
           "link_id",
-          "read"
+          "read",
+          "created_at"
         ],
         "title": "NotificationResponse",
         "type": "object"

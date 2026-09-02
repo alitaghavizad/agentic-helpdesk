@@ -28,6 +28,7 @@ function fromStreamEvent(event: NotificationStreamEvent): Notification {
     link_type: event.link_type,
     link_id: event.link_id,
     read: false,
+    created_at: event.created_at,
   };
 }
 
@@ -64,13 +65,17 @@ export function useNotifications(): UseNotifications {
   // A ref, not state: the stream effect below reads the latest backlog ids
   // on every frame without needing the backlog itself in its dependency
   // array (which would tear the connection down and reopen it on every
-  // backlog refetch).
+  // backlog refetch). Kept in sync from an effect rather than assigned
+  // during render -- mutating a ref while rendering is the anti-pattern
+  // React's strict/concurrent modes warn about, even when (as here) it
+  // happens to be idempotent.
   const backlogIds = useRef<Set<string>>(new Set());
-  backlogIds.current = new Set(backlog.map((item) => item.id));
-
-  // Once the backlog catches up with a notification this hook already
-  // streamed in, drop the streamed copy so the id renders exactly once.
   useEffect(() => {
+    backlogIds.current = new Set(backlog.map((item) => item.id));
+    // Once the backlog catches up with a notification this hook already
+    // streamed in, drop the streamed copy so the id renders exactly once.
+    // Runs in the same commit as the assignment above (both are effects
+    // declared in this order), so the filter always sees the fresh set.
     setStreamed((current) => current.filter((item) => !backlogIds.current.has(item.id)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query.data]);
@@ -83,6 +88,13 @@ export function useNotifications(): UseNotifications {
 
     const controller = new AbortController();
     let cancelled = false;
+    let backoffTimer: ReturnType<typeof setTimeout> | null = null;
+
+    function wait(ms: number): Promise<void> {
+      return new Promise((resolve) => {
+        backoffTimer = setTimeout(resolve, ms);
+      });
+    }
 
     async function run() {
       let attempt = 0;
@@ -112,7 +124,7 @@ export function useNotifications(): UseNotifications {
         // backlog replay re-delivers whatever this one missed.
         const delay = Math.min(1000 * 2 ** attempt, MAX_BACKOFF_MS);
         attempt += 1;
-        await new Promise((resolve) => setTimeout(resolve, delay));
+        await wait(delay);
       }
     }
 
@@ -121,6 +133,10 @@ export function useNotifications(): UseNotifications {
     return () => {
       cancelled = true;
       controller.abort();
+      // Otherwise a stray timer from the backoff wait above outlives the
+      // component (harmlessly, since `cancelled` guards the loop it would
+      // resume -- but for up to 30s of nothing to do).
+      if (backoffTimer !== null) clearTimeout(backoffTimer);
     };
   }, [isUser]);
 
