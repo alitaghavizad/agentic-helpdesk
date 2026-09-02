@@ -1121,6 +1121,8 @@ export interface components {
             department: string | null;
             /** Employee Ref */
             employee_ref: string | null;
+            /** Full Name */
+            full_name: string | null;
             /** Helpdesk Ref */
             helpdesk_ref: string | null;
             /** Kind */
@@ -1129,6 +1131,8 @@ export interface components {
             role: string;
             /** User Id */
             user_id: string | null;
+            /** Username */
+            username: string | null;
         };
         /** RequesterInfo */
         RequesterInfo: {

@@ -59,6 +59,28 @@ def test_me_returns_principal_matching_token(client, db_session):
     body = response.json()
     assert body["role"] == "admin"
     assert body["kind"] == "user"
+    # The seeded admin (app/db/seed.py) has full_name="Administrator" and no
+    # employee_ref/helpdesk_ref -- this is what the frontend NavBar shows in
+    # place of a raw user id, so it must be the real name, not None.
+    assert body["username"] == settings.admin_username
+    assert body["full_name"] == "Administrator"
+
+
+def test_me_for_guest_has_no_username_but_has_the_given_name(client):
+    # A guest is not a row in `users`, so username is honestly None rather
+    # than invented -- full_name carries the guest's own self-reported name.
+    guest_response = client.post(
+        "/api/auth/guest", json={"name": "Curious Visitor", "email": "visitor@example.com"},
+    )
+    access_token = guest_response.json()["access_token"]
+    response = client.get(
+        "/api/auth/me", headers={"Authorization": f"Bearer {access_token}"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["kind"] == "guest"
+    assert body["username"] is None
+    assert body["full_name"] == "Curious Visitor"
 
 
 def test_refresh_issues_new_access_token(client, db_session):

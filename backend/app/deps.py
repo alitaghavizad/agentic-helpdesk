@@ -36,6 +36,8 @@ def get_current_principal(
         helpdesk_ref=claims.get("helpdesk_ref"),
         guest_name=claims.get("guest_name"),
         guest_email=claims.get("guest_email"),
+        username=claims.get("username"),
+        full_name=claims.get("full_name"),
     )
 
 

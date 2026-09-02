@@ -1231,6 +1231,17 @@
             ],
             "title": "Employee Ref"
           },
+          "full_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Full Name"
+          },
           "helpdesk_ref": {
             "anyOf": [
               {
@@ -1260,6 +1271,17 @@
               }
             ],
             "title": "User Id"
+          },
+          "username": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Username"
           }
         },
         "required": [
@@ -1269,7 +1291,9 @@
           "clearance",
           "department",
           "employee_ref",
-          "helpdesk_ref"
+          "helpdesk_ref",
+          "username",
+          "full_name"
         ],
         "title": "PrincipalResponse",
         "type": "object"

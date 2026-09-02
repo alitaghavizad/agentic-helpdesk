@@ -7,7 +7,7 @@ function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 }
 const ADMIN = { kind: "user", user_id: "u1", role: "admin", clearance: "privileged",
-  department: "IT", employee_ref: null, helpdesk_ref: null };
+  department: "IT", employee_ref: null, helpdesk_ref: null, username: "admin", full_name: "Administrator" };
 
 function Probe() {
   const { status, principal } = useAuth();

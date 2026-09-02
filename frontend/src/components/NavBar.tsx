@@ -16,8 +16,19 @@ const ADMIN_LINKS: Array<{ to: string; label: string }> = [
 ];
 
 function identityLabel(principal: Principal): string {
-  if (principal.kind === "guest") return "Guest";
-  return principal.employee_ref ?? principal.helpdesk_ref ?? principal.user_id ?? principal.role;
+  // full_name/username are populated for every principal that has them
+  // (backend/app/auth/router.py): a real user's actual name, or a guest's
+  // self-reported one. employee_ref/helpdesk_ref/user_id are a defensive
+  // fallback only -- the seeded admin has neither ref and would otherwise
+  // show a raw UUID where their name belongs.
+  return (
+    principal.full_name ??
+    principal.username ??
+    principal.employee_ref ??
+    principal.helpdesk_ref ??
+    principal.user_id ??
+    principal.role
+  );
 }
 
 const LINK_CLASS = ({ isActive }: { isActive: boolean }) =>

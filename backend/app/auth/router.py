@@ -48,6 +48,12 @@ class PrincipalResponse(BaseModel):
     department: str | None
     employee_ref: str | None
     helpdesk_ref: str | None
+    # A guest is not a row in `users`, so it has no username -- optional
+    # rather than invented. full_name is set for both kinds (the user's
+    # real name, or the guest's self-reported name) so a UI has one field
+    # it can always show in place of a raw id.
+    username: str | None
+    full_name: str | None
 
 
 def _claims_for_user(user: User) -> dict:
@@ -60,6 +66,8 @@ def _claims_for_user(user: User) -> dict:
         "department": user.department,
         "employee_ref": user.employee_ref,
         "helpdesk_ref": user.helpdesk_ref,
+        "username": user.username,
+        "full_name": user.full_name,
     }
 
 
@@ -100,6 +108,10 @@ def guest_login(payload: GuestRequest, response: Response, db: DbSession) -> Tok
         "helpdesk_ref": None,
         "guest_name": payload.name,
         "guest_email": payload.email,
+        # No `users` row exists for a guest, so no username -- full_name is
+        # the guest's own self-reported name, which is real and honest.
+        "username": None,
+        "full_name": payload.name,
     }
     return _issue_tokens(db, response, claims, subject=payload.email)
 
@@ -143,4 +155,5 @@ def me(principal: CurrentPrincipal) -> PrincipalResponse:
         kind=principal.kind, user_id=principal.user_id, role=principal.role,
         clearance=principal.clearance, department=principal.department,
         employee_ref=principal.employee_ref, helpdesk_ref=principal.helpdesk_ref,
+        username=principal.username, full_name=principal.full_name,
     )

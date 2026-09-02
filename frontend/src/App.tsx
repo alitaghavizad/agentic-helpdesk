@@ -66,6 +66,11 @@ function App() {
         <Route path="lessons" element={<Placeholder title="Admin lessons" />} />
         <Route path="audit" element={<Placeholder title="Admin audit" />} />
         <Route path="costs" element={<Placeholder title="Admin costs" />} />
+        {/* path="/admin/*" matches and shadows the top-level "*" below for
+            anything under /admin, so an unmatched child (e.g. /admin/typo)
+            must get its own not-found here or <Outlet/> silently renders
+            nothing. */}
+        <Route path="*" element={<NotFound />} />
       </Route>
 
       <Route path="*" element={<NotFound />} />

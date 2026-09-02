@@ -47,6 +47,11 @@ class Principal:
     helpdesk_ref: str | None
     guest_name: str | None = None
     guest_email: str | None = None
+    # A guest is not a row in `users` and so has no username -- None there is
+    # honest, not a gap to paper over. `full_name` is populated for both
+    # kinds: the user's real name, or the guest's self-reported name.
+    username: str | None = None
+    full_name: str | None = None
 
 
 def map_access_classification(raw: str) -> Clearance:
