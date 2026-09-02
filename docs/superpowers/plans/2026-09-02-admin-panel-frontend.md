@@ -18,7 +18,7 @@
 - **No `fetch(` and no URL string outside `src/api/`.** Pages call hooks; hooks call `src/api/endpoints/*`.
 - **No component library, no Radix, no charting library** (spec D5, §5.3).
 - **`cost_usd: null` renders the string `unpriced`, never `$0.00`** (parent spec §17).
-- **Backend response models are declarations, not transformations.** Routers keep building payloads field by field; adding a `response_model` must not change any existing response body.
+- **Backend response models are declarations, not transformations.** Routers keep building payloads field by field; adding a `response_model` must never *silently* filter or reshape an existing response body. The one deliberate exception is `PATCH /api/admin/lessons/{id}`, which task 0 widens from `{id, status}` to the full `LessonSummary` so the screen can re-render the edited row — an intentional, stated widening, not a side effect of declaring a model.
 - Backend tests: `cd backend && uv run python tasks.py test` (~4-7 min) or `cd backend && uv run pytest tests/<file> -v` for one file.
 - Frontend tests: `cd frontend && npm test`. Type check: `cd frontend && npx tsc --noEmit`.
 - `make` is not installed on this machine. Use `uv run python tasks.py <task>`.
@@ -579,7 +579,11 @@ If `npm create vite` refuses because `frontend/` already contains `openapi.json`
 `frontend/vite.config.ts`:
 
 ```ts
-import { defineConfig } from "vite";
+// defineConfig comes from "vitest/config", NOT "vite": the plain Vite
+// export does not type the `test` key, so a config carrying it fails
+// `tsc --noEmit` in step 3 with "Object literal may only specify known
+// properties".
+import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 
