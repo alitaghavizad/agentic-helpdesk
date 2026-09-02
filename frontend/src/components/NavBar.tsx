@@ -2,6 +2,7 @@ import { NavLink, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 import type { Principal } from "../api/endpoints/auth";
 import { Badge } from "./Badge";
+import { NotificationBell } from "./NotificationBell";
 
 const ADMIN_LINKS: Array<{ to: string; label: string }> = [
   { to: "/admin", label: "Overview" },
@@ -66,6 +67,10 @@ export function NavBar() {
         )}
 
         <div className="ml-auto flex items-center gap-3">
+          {/* Guests have no notification feed (notifications.user_id is
+              NOT NULL and a guest is not a row in `users`), so the bell
+              itself is user-only rather than rendering permanently empty. */}
+          {principal.kind === "user" && <NotificationBell />}
           <span className="text-sm text-slate-600">{identityLabel(principal)}</span>
           <Badge tone={principal.role === "admin" ? "info" : "neutral"}>{principal.role}</Badge>
           <button

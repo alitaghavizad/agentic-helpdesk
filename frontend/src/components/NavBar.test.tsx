@@ -1,6 +1,7 @@
 import { render, screen } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NavBar } from "./NavBar";
 import * as ctx from "../auth/AuthContext";
 
@@ -10,18 +11,46 @@ const BASE = {
   username: "j.doe", full_name: "Jane Doe",
 };
 
+// A "user" principal (BASE.kind) renders NotificationBell, which fetches
+// through useNotifications -- so this file needs a QueryClient and a
+// stubbed fetch, the same as any other test that mounts NavBar as-is.
+const fetchMock = vi.fn();
+
+function jsonResponse(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+}
+
 function renderWith(principal: Partial<ctx.Principal>) {
   vi.spyOn(ctx, "useAuth").mockReturnValue({
     status: "signed-in", principal, login: vi.fn(), loginAsGuest: vi.fn(), logout: vi.fn(),
   } as never);
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
-    <MemoryRouter>
-      <NavBar />
-    </MemoryRouter>,
+    <QueryClientProvider client={client}>
+      <MemoryRouter>
+        <NavBar />
+      </MemoryRouter>
+    </QueryClientProvider>,
   );
 }
 
-afterEach(() => vi.restoreAllMocks());
+beforeEach(() => {
+  vi.stubGlobal("fetch", fetchMock);
+  fetchMock.mockReset();
+  fetchMock.mockImplementation(async (url: string) => {
+    if (url.includes("/stream")) {
+      // Never closes -- matches a real long-lived connection and keeps
+      // these tests from exercising the hook's reconnect/backoff path.
+      return new Response(new ReadableStream(), { headers: { "content-type": "text/event-stream" } });
+    }
+    return jsonResponse([]);
+  });
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
 describe("NavBar identity", () => {
   it("shows the principal's full name, not a raw id", () => {
