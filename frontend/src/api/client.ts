@@ -105,7 +105,12 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
  * can read a stream body. Used only by the three SSE consumers.
  */
 export async function apiStream(path: string, init: RequestInit = {}): Promise<Response> {
-  const response = await send(path, { ...init, headers: { Accept: "text/event-stream", ...init.headers } });
+  // Built through a Headers object rather than object-spreading init.headers:
+  // a caller-supplied Headers instance has no enumerable own properties, so
+  // `{ Accept: ..., ...init.headers }` silently drops every header on it.
+  const headers = new Headers(init.headers);
+  if (!headers.has("Accept")) headers.set("Accept", "text/event-stream");
+  const response = await send(path, { ...init, headers });
   if (!response.ok) await raise(response);
   return response;
 }

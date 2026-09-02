@@ -51,7 +51,11 @@ describe("readSse", () => {
   it("handles a multi-byte character split across chunks", async () => {
     const encoder = new TextEncoder();
     const bytes = encoder.encode('data: {"t":"café"}\n\n');
-    const split = 14; // lands inside the é
+    // "é" is the two UTF-8 bytes 0xC3 0xA9 starting at index 15; splitting at
+    // 16 cuts between them, leaving the first chunk ending in a lone lead
+    // byte that must be held back and combined with the continuation byte
+    // in the second chunk.
+    const split = 16;
     const body = new ReadableStream<Uint8Array>({
       start(controller) {
         controller.enqueue(bytes.slice(0, split));

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ApiError, apiFetch, setAccessToken, setAuthFailureHandler } from "./client";
+import { ApiError, apiFetch, apiStream, setAccessToken, setAuthFailureHandler } from "./client";
 
 const fetchMock = vi.fn();
 
@@ -95,5 +95,21 @@ describe("apiFetch", () => {
   it("returns undefined for a 204 rather than choking on an empty body", async () => {
     fetchMock.mockResolvedValueOnce(new Response(null, { status: 204 }));
     await expect(apiFetch("/api/auth/logout", { method: "POST" })).resolves.toBeUndefined();
+  });
+});
+
+describe("apiStream", () => {
+  it("keeps a caller-supplied Headers instance's headers and still sets Accept", async () => {
+    // A Headers instance has no enumerable own properties, so building the
+    // request with `{ Accept: ..., ...init.headers }` silently drops every
+    // header on it -- this is the regression guard for that.
+    fetchMock.mockResolvedValueOnce(new Response(new ReadableStream()));
+    await apiStream("/api/admin/runs/1/stream", {
+      headers: new Headers({ "X-Trace-Id": "abc-123" }),
+    });
+    const [, init] = fetchMock.mock.calls[0];
+    const sent = new Headers(init.headers);
+    expect(sent.get("x-trace-id")).toBe("abc-123");
+    expect(sent.get("accept")).toBe("text/event-stream");
   });
 });
