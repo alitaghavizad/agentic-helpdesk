@@ -9,11 +9,14 @@ these async would silently reintroduce that.
 """
 from __future__ import annotations
 
+import asyncio
+import json
 import uuid
 from datetime import datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.admin import queries
@@ -23,12 +26,15 @@ from app.db.models import (
     ActorType, ApprovalStatus, Clearance, Lesson, LessonStatus, Role, User,
 )
 from app.deps import DbSession, require_role
+from app.notifications import broker
 from app.rbac.policy import Principal
 from app.tracing.store import trace_tree
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
 AdminPrincipal = Annotated[Principal, Depends(require_role("admin"))]
+
+_KEEPALIVE_SECONDS = 15
 
 
 class DecideRequest(BaseModel):
@@ -137,6 +143,51 @@ def admin_runs(
         } for r in page.items],
         total=page.total, limit=page.limit, offset=page.offset,
     )
+
+
+@router.get("/runs/stream")
+async def admin_runs_stream(principal: AdminPrincipal) -> StreamingResponse:
+    """Live run activity for the Traces screen.
+
+    Takes NO `db: DbSession`, deliberately. FastAPI exits the dependency
+    stack only after the response completes, which for an SSE stream means
+    when the client disconnects; Phase 6 measured that a stream holding its
+    request session pins a pooled Postgres connection `idle in transaction`
+    for the life of that stream, and about fifteen such streams exhaust the
+    pool (pool_size=5 + max_overflow=10), after which login, chat and
+    approvals all block. There is no backlog to replay here -- run history
+    is available from GET /api/admin/runs -- so this endpoint needs no
+    session at all, and an idle stream therefore holds nothing.
+
+    That also means there is no subscribe-before-read ordering hazard to
+    manage, unlike the notification stream: with no snapshot read there is
+    no window for an event to fall between the two sources.
+
+    `async def`, unlike every other route in this module: the whole body is
+    awaiting a queue, so there is nothing to push into a threadpool, and a
+    sync generator could not await the broker at all.
+    """
+    async def event_stream():
+        with broker.subscribe(broker.ADMIN_RUNS_CHANNEL) as subscription:
+            while True:
+                try:
+                    event = await asyncio.wait_for(
+                        subscription.get(), timeout=_KEEPALIVE_SECONDS,
+                    )
+                except asyncio.TimeoutError:
+                    # A comment frame: proxies close a stream that has said
+                    # nothing for long enough, and run activity is bursty.
+                    yield ": keepalive\n\n"
+                    continue
+                except broker.SubscriberDropped:
+                    # Fell too far behind and the broker stopped queueing for
+                    # it. Close rather than pretend the feed is still live:
+                    # the client reconnects and re-reads history from
+                    # GET /api/admin/runs, so nothing durable is lost.
+                    return
+                yield f"data: {json.dumps(event)}\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 def _run_summary(run) -> dict:

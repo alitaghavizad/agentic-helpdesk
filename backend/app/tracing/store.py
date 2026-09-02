@@ -114,7 +114,26 @@ def finalize_run(*, run_id: uuid.UUID, status: RunStatus, error: str | None) -> 
         run.cost_usd = sum(priced) if priced else None
         run.llm_calls = sum(1 for s in spans if s.kind == SpanKind.LLM)
         run.tool_calls = sum(1 for s in spans if s.kind == SpanKind.TOOL)
+
+        # Built BEFORE the commit, published AFTER it. Assembling it first
+        # avoids re-reading every attribute back out of the database (the
+        # sessionmaker expires instances on commit); publishing after means
+        # a subscriber can never be told about a finalisation that then
+        # rolled back. `broker` imports nothing from this project, so the
+        # local import only guards against an import cycle appearing later.
+        event = {
+            "type": "run_finished",
+            "id": str(run.id),
+            "trigger": run.trigger.value,
+            "status": run.status.value,
+            "duration_ms": run.duration_ms,
+            "cost_usd": float(run.cost_usd) if run.cost_usd is not None else None,
+        }
         session.commit()
+
+    from app.notifications import broker
+
+    broker.publish(broker.ADMIN_RUNS_CHANNEL, event)
 
 
 @dataclass
