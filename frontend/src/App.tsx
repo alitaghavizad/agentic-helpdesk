@@ -4,6 +4,7 @@ import { RequireRole } from "./auth/RequireRole";
 import { NavBar } from "./components/NavBar";
 import { Chat } from "./pages/Chat";
 import { Login } from "./pages/Login";
+import { Tickets } from "./pages/Tickets";
 
 /** NavBar plus the routed page. Only signed-in routes get a shell. */
 function Shell() {
@@ -54,7 +55,8 @@ function App() {
 
       <Route element={<RequireRole><Shell /></RequireRole>}>
         <Route path="/chat" element={<Chat />} />
-        <Route path="/tickets" element={<Placeholder title="Tickets" />} />
+        <Route path="/tickets" element={<Tickets />} />
+        <Route path="/tickets/:id" element={<Tickets />} />
       </Route>
 
       <Route path="/admin/*" element={<RequireRole role="admin"><Shell /></RequireRole>}>

@@ -35,11 +35,14 @@ function messageText(content: unknown): string {
 
 function outcomeLabel(outcome: Outcome): { text: string; to?: string } {
   switch (outcome.type) {
-    case "ticket_created":
-      // No /tickets/:id route exists yet, so this links to the list rather
-      // than shipping a dead link -- a later task owns the deep link once
-      // that route exists.
-      return { text: `Ticket ${outcome.data.ticket_number ?? ""} created`, to: "/tickets" };
+    case "ticket_created": {
+      // /tickets/:id is now a real route (task 5's Tickets page), so this
+      // links straight to the created ticket instead of the list -- falling
+      // back to the list only if the frame is somehow missing its id.
+      const ticketId = outcome.data.ticket_id;
+      const to = typeof ticketId === "string" && ticketId.length > 0 ? `/tickets/${ticketId}` : "/tickets";
+      return { text: `Ticket ${outcome.data.ticket_number ?? ""} created`, to };
+    }
     case "approval_requested":
       return { text: `Approval ${outcome.data.request_number ?? ""} requested` };
     case "task_recorded":

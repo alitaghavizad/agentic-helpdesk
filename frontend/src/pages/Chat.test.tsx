@@ -183,7 +183,7 @@ describe("Chat", () => {
     });
   });
 
-  it("renders a ticket_created frame as a card linking to the ticket list", async () => {
+  it("renders a ticket_created frame as a card linking to the created ticket", async () => {
     let stream: ReturnType<typeof makeTurnStream> | undefined;
     fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
       const u = String(url);
@@ -210,9 +210,40 @@ describe("Chat", () => {
       stream!.send({ type: "ticket_created", ticket_number: "TCK-000099", ticket_id: "tid1" });
     });
 
-    // No /tickets/:id route exists yet (task 5 owns it) -- the card links
-    // to the ticket list, not a per-id deep link.
+    // Task 5 adds the /tickets/:id route -- the card must deep-link to the
+    // created ticket by id, not to the list.
     const link = await screen.findByRole("link", { name: /ticket tck-000099 created/i });
+    expect(link).toHaveAttribute("href", "/tickets/tid1");
+  });
+
+  it("falls back to the ticket list when a ticket_created frame is somehow missing its id", async () => {
+    let stream: ReturnType<typeof makeTurnStream> | undefined;
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const u = String(url);
+      if (u.endsWith("/api/conversations")) return jsonResponse(CONV_LIST);
+      if (u.endsWith("/api/conversations/c1") && init?.method === undefined) {
+        return jsonResponse(conversationDetail("c1", []));
+      }
+      if (u.endsWith("/api/conversations/c1/messages") && init?.method === "POST") {
+        stream = makeTurnStream((init.signal as AbortSignal) ?? undefined);
+        return stream.response;
+      }
+      throw new Error(`unexpected call: ${u} ${init?.method}`);
+    });
+
+    renderChat();
+    await screen.findByText("VPN issue");
+    await userEvent.click(screen.getByText("VPN issue"));
+    await screen.findByText(/no messages yet/i);
+    await userEvent.type(screen.getByLabelText("Message"), "Please open a ticket");
+    await userEvent.click(screen.getByRole("button", { name: /send/i }));
+    await waitFor(() => expect(stream).toBeDefined());
+
+    await act(async () => {
+      stream!.send({ type: "ticket_created", ticket_number: "TCK-000100" });
+    });
+
+    const link = await screen.findByRole("link", { name: /ticket tck-000100 created/i });
     expect(link).toHaveAttribute("href", "/tickets");
   });
 

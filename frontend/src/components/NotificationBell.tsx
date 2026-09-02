@@ -5,16 +5,16 @@ import type { Notification } from "../api/endpoints/notifications";
 import { StateBlock } from "./StateBlock";
 
 /**
- * Only a `link_type` this app already has a real detail route for gets
- * turned into a link -- none do yet ("ticket" resolves to a placeholder
- * screen in App.tsx with no per-id route, so it would hit the catch-all
- * not-found). Every notification renders as plain text until a later task
- * adds a ticket-detail route, at which point this returns a path for it.
+ * Only a `link_type` this app has a real detail route for gets turned into a
+ * link. `"ticket"` resolves to `/tickets/{link_id}` now that App.tsx routes
+ * it (task 5's Tickets page, which also serves the by-id view) -- every
+ * other `link_type` still renders as plain text until a task adds a route
+ * for it too.
  */
-function pathFor(_notification: Notification): string | null {
-  // No `link_type` has a real per-id route yet -- "ticket" resolves to a
-  // Placeholder in App.tsx today. Wire up a case here (e.g. `link_type ===
-  // "ticket" -> "/tickets/${link_id}"`) once a task adds that route.
+function pathFor(notification: Notification): string | null {
+  if (notification.link_type === "ticket" && notification.link_id) {
+    return `/tickets/${notification.link_id}`;
+  }
   return null;
 }
 
