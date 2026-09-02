@@ -2,6 +2,7 @@ import { Navigate, Outlet, Route, Routes } from "react-router-dom";
 import { landingFor, useAuth } from "./auth/AuthContext";
 import { RequireRole } from "./auth/RequireRole";
 import { NavBar } from "./components/NavBar";
+import { Chat } from "./pages/Chat";
 import { Login } from "./pages/Login";
 
 /** NavBar plus the routed page. Only signed-in routes get a shell. */
@@ -52,7 +53,7 @@ function App() {
       <Route path="/" element={<Home />} />
 
       <Route element={<RequireRole><Shell /></RequireRole>}>
-        <Route path="/chat" element={<Placeholder title="Chat" />} />
+        <Route path="/chat" element={<Chat />} />
         <Route path="/tickets" element={<Placeholder title="Tickets" />} />
       </Route>
 
