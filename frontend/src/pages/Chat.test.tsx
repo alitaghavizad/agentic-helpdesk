@@ -5,6 +5,7 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Chat } from "./Chat";
 import * as authCtx from "../auth/AuthContext";
+import { conversationQueryKey } from "../hooks/useChatTurn";
 
 // fetch is stubbed directly, the same way client.test.ts and
 // useNotifications.test.tsx do it -- MSW is not used anywhere else in this
@@ -76,13 +77,13 @@ function conversationDetail(id: string, messages: unknown[] = []) {
   return { id, title: "VPN issue", status: "open", messages };
 }
 
-function renderChat(principal: unknown = EMPLOYEE) {
+function renderChat(principal: unknown = EMPLOYEE, client?: QueryClient) {
   vi.spyOn(authCtx, "useAuth").mockReturnValue({
     status: "signed-in", principal, login: vi.fn(), loginAsGuest: vi.fn(), logout: vi.fn(),
   } as never);
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const queryClient = client ?? new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
-    <QueryClientProvider client={client}>
+    <QueryClientProvider client={queryClient}>
       <MemoryRouter>
         <Chat />
       </MemoryRouter>
@@ -437,5 +438,110 @@ describe("Chat", () => {
     view.unmount();
 
     expect(capturedSignal?.aborted).toBe(true);
+  });
+
+  it("does not render the user's own message twice when the conversation refetches mid-turn", async () => {
+    // Regression: the optimistic user bubble used to clear on the
+    // ASSISTANT's persistence (`turnPersisted`), not the user message's own.
+    // The backend commits the user's message synchronously, before the turn
+    // even starts running (backend/app/chat/router.py's
+    // send_message_endpoint stages and commits it up front) -- and
+    // TanStack Query's default `refetchOnWindowFocus` (main.tsx's
+    // `new QueryClient()` does not disable it) means the transcript can
+    // refetch and pick up that user message mid-turn, long before the
+    // assistant's answer -- and `turnPersisted` -- ever exist. Simulating
+    // that refetch directly against the test's own QueryClient (rather than
+    // firing a real focus event) isolates exactly this: a refetch landing
+    // while `pendingUserContent` is still set and the turn is still busy.
+    let stream: ReturnType<typeof makeTurnStream> | undefined;
+    let detailCalls = 0;
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const u = String(url);
+      if (u.endsWith("/api/conversations")) return jsonResponse(CONV_LIST);
+      if (u.endsWith("/api/conversations/c1") && init?.method === undefined) {
+        detailCalls += 1;
+        if (detailCalls === 1) return jsonResponse(conversationDetail("c1", []));
+        // The mid-turn refetch: the user's message is already committed;
+        // the assistant has not answered yet.
+        return jsonResponse(conversationDetail("c1", [
+          { id: "m-user", role: "user", content: "Ping mid-turn", created_at: "2026-09-02T09:00:00Z", run_id: null },
+        ]));
+      }
+      if (u.endsWith("/api/conversations/c1/messages") && init?.method === "POST") {
+        stream = makeTurnStream((init.signal as AbortSignal) ?? undefined);
+        return stream.response;
+      }
+      throw new Error(`unexpected call: ${u} ${init?.method}`);
+    });
+
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    renderChat(EMPLOYEE, client);
+    await screen.findByText("VPN issue");
+    await userEvent.click(screen.getByText("VPN issue"));
+    await screen.findByText(/no messages yet/i);
+    await userEvent.type(screen.getByLabelText("Message"), "Ping mid-turn");
+    await userEvent.click(screen.getByRole("button", { name: /send/i }));
+    await waitFor(() => expect(stream).toBeDefined());
+
+    // The turn is still in flight -- no `done` sent yet -- when the
+    // transcript refetches (e.g. the tab regains focus).
+    await act(async () => {
+      await client.refetchQueries({ queryKey: conversationQueryKey("c1") });
+    });
+    await waitFor(() => expect(detailCalls).toBeGreaterThan(1));
+
+    expect(screen.getAllByText("Ping mid-turn")).toHaveLength(1);
+
+    await act(async () => {
+      stream!.send({ type: "done", run_id: "r-1" });
+      stream!.close();
+    });
+  });
+
+  it("does not let a done frame with no run_id false-match a stored message's null run_id", async () => {
+    // The errored-turn path: a turn that fails can reach `done` with no
+    // `run_id` at all. Without the `turn.runId !== null` guard in
+    // `turnPersisted`, that null would coincidentally match ANY stored
+    // message with `run_id: null` -- which every plain user message has --
+    // and the live bubble (including whatever the assistant said before
+    // things went wrong) would vanish even though nothing from THIS turn
+    // was ever actually persisted.
+    let stream: ReturnType<typeof makeTurnStream> | undefined;
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const u = String(url);
+      if (u.endsWith("/api/conversations")) return jsonResponse(CONV_LIST);
+      if (u.endsWith("/api/conversations/c1") && init?.method === undefined) {
+        // A prior turn's stored user message -- run_id: null, same as any
+        // user row -- present before this turn even starts.
+        return jsonResponse(conversationDetail("c1", [
+          { id: "m-prior-user", role: "user", content: "Earlier question", created_at: "2026-09-01T09:00:00Z", run_id: null },
+        ]));
+      }
+      if (u.endsWith("/api/conversations/c1/messages") && init?.method === "POST") {
+        stream = makeTurnStream((init.signal as AbortSignal) ?? undefined);
+        return stream.response;
+      }
+      throw new Error(`unexpected call: ${u} ${init?.method}`);
+    });
+
+    renderChat();
+    await screen.findByText("VPN issue");
+    await userEvent.click(screen.getByText("VPN issue"));
+    await screen.findByText("Earlier question");
+    await userEvent.type(screen.getByLabelText("Message"), "New question");
+    await userEvent.click(screen.getByRole("button", { name: /send/i }));
+    await waitFor(() => expect(stream).toBeDefined());
+
+    await act(async () => {
+      stream!.send({ type: "token", text: "Still working on it" });
+      stream!.send({ type: "done" }); // no run_id at all
+      stream!.close();
+    });
+
+    // Nothing about this turn was ever persisted (the refetch fixture above
+    // never changes), so the answer must stay visible -- hiding it here
+    // would be acting on a false "already saved" signal from a
+    // coincidental null-run_id match.
+    await waitFor(() => expect(screen.getByText("Still working on it")).toBeInTheDocument());
   });
 });

@@ -109,6 +109,11 @@ export function Chat() {
 
   const { turn, busy, send, reset } = useChatTurn(selectedId);
   const [pendingUserContent, setPendingUserContent] = useState<string | null>(null);
+  // The message ids present the moment a send started, captured so the
+  // optimistic user bubble can tell "a NEW user message landed" apart from
+  // "the transcript I already knew about got refetched." Not state: writing
+  // it must never itself trigger a render.
+  const priorMessageIdsRef = useRef<Set<string>>(new Set());
 
   // Switching conversations must not leave a previous conversation's live
   // turn (or its optimistic user bubble) bleeding into the newly selected
@@ -116,6 +121,7 @@ export function Chat() {
   useEffect(() => {
     reset();
     setPendingUserContent(null);
+    priorMessageIdsRef.current = new Set();
   }, [selectedId, reset]);
 
   const messages: MessageView[] = conversationQuery.data?.messages ?? [];
@@ -132,13 +138,28 @@ export function Chat() {
   const turnPersisted = turn.done && turn.runId !== null
     && messages.some((message) => message.run_id === turn.runId);
 
-  // Once the turn's answer is persisted, its optimistic user bubble is too
-  // (the user message is staged and committed before the turn even starts
-  // running -- backend/app/chat/router.py's send_message_endpoint), so both
-  // clear together.
+  // Whether the OPTIMISTIC USER bubble's own message is now in the stored
+  // transcript. Deliberately NOT gated on `turnPersisted`: the backend
+  // commits the user's message synchronously, before the turn even starts
+  // running (backend/app/chat/router.py's send_message_endpoint stages and
+  // commits it up front) -- long before the assistant's answer is
+  // persisted, and TanStack Query's default `refetchOnWindowFocus` means the
+  // transcript can refetch and pick up that user message mid-turn, well
+  // before `turnPersisted` ever becomes true. Gating on `turnPersisted` left
+  // a window where the transcript already had the real user message AND the
+  // optimistic bubble was still showing it -- rendered twice. Comparing
+  // against the message ids captured right before this send started (rather
+  // than matching on content, which a duplicate could coincidentally share)
+  // is what makes this correct regardless of when or how many times a
+  // refetch lands.
+  const userMessagePersisted = pendingUserContent !== null
+    && messages.some((message) => message.role === "user" && !priorMessageIdsRef.current.has(message.id));
+
+  // Once the user's own message is persisted, the optimistic bubble showing
+  // it is no longer needed.
   useEffect(() => {
-    if (turnPersisted) setPendingUserContent(null);
-  }, [turnPersisted]);
+    if (userMessagePersisted) setPendingUserContent(null);
+  }, [userMessagePersisted]);
 
   async function handleNewConversation() {
     const created = await chat.createConversation();
@@ -154,7 +175,10 @@ export function Chat() {
     // Optimistic: the composer clears immediately, but a turn can run for
     // tens of seconds, and the user's own question should not vanish from
     // the transcript for that whole window just because the stored
-    // transcript hasn't been refetched yet.
+    // transcript hasn't been refetched yet. Snapshot which message ids
+    // already exist so `userMessagePersisted` can recognise the real one
+    // landing, however soon a refetch brings it in.
+    priorMessageIdsRef.current = new Set(messages.map((message) => message.id));
     setPendingUserContent(content);
     await send(content);
   }
@@ -177,7 +201,7 @@ export function Chat() {
 
   const showLiveTurn = !turnPersisted
     && (busy || turn.text.length > 0 || turn.tools.length > 0 || turn.outcomes.length > 0 || turn.error !== null);
-  const showPendingUser = pendingUserContent !== null && !turnPersisted;
+  const showPendingUser = pendingUserContent !== null && !userMessagePersisted;
 
   return (
     <div className="grid grid-cols-1 gap-6 md:grid-cols-[16rem_1fr]">
