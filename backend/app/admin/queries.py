@@ -330,6 +330,21 @@ def list_users(db: Session, *, limit: int | None = None, offset: int | None = No
     return Page(items=items, total=int(total), limit=limit, offset=offset)
 
 
+def conversation_runs(db: Session, conversation_id) -> list[Run]:
+    """Every run belonging to one conversation, newest first, so the detail
+    screen can link each into GET /api/admin/runs/{id}/trace.
+
+    Unpaginated, unlike every other list in this module: runs are bounded by
+    the turns in a single conversation, not by the size of the table.
+    """
+    return (
+        db.query(Run)
+        .filter(Run.conversation_id == conversation_id)
+        .order_by(Run.started_at.desc(), Run.id.desc())
+        .all()
+    )
+
+
 def list_lessons(db: Session, *, limit: int | None = None, offset: int | None = None) -> Page:
     """Newest first, with the `id` tiebreaker for the same reason as
     `list_runs`: `lessons.created_at` is the column's `func.now()` server

@@ -20,6 +20,8 @@ from typing import Any, Generic, TypeVar
 
 from pydantic import BaseModel
 
+from app.chat.schemas import MessageView
+
 ItemT = TypeVar("ItemT")
 
 
@@ -204,3 +206,28 @@ class RunTrace(BaseModel):
     roots: list[SpanNode]
     span_count: int
     truncated: bool
+
+
+class ConversationDetail(BaseModel):
+    """GET /conversations/{id}. Parent spec 15 wants the transcript beside
+    its span tree, so this returns both halves in one call: the messages,
+    and enough of each run to render a row that links into the trace view."""
+    conversation: ConversationSummary
+    messages: list[MessageView]
+    runs: list[RunSummary]
+
+
+class UserPatchResult(BaseModel):
+    id: str
+    role: str
+    clearance: str | None
+
+
+class LessonDeleteResult(BaseModel):
+    """`archived` is redundant with `status == "archived"` but the router
+    body already carries it (tests/test_admin_mutations.py asserts it
+    verbatim), and a response_model must widen to fit an existing body
+    rather than silently drop a field from it."""
+    id: str
+    status: str
+    archived: bool

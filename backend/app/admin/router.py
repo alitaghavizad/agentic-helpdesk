@@ -20,9 +20,11 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.admin import queries
+from app.admin.dossier import IncidentDossier
 from app.admin.schemas import (
-    AuditEntry, ConversationSummary, Costs, LessonSummary, Overview, PageResponse,
-    RunSummary, RunTrace, SpanNode, TraceRun, UserSummary,
+    AuditEntry, ConversationDetail, ConversationSummary, Costs, LessonDeleteResult,
+    LessonSummary, Overview, PageResponse, RunSummary, RunTrace, SpanNode, TraceRun,
+    UserPatchResult, UserSummary,
 )
 from app.approvals import service as approvals
 from app.audit.service import record_audit
@@ -120,6 +122,19 @@ def admin_costs(principal: AdminPrincipal, db: DbSession) -> dict:
     return queries.costs(db)
 
 
+def _run_list_row(run) -> dict:
+    """The `RunSummary` shape, shared by GET /runs and the runs list nested
+    inside GET /admin/conversations/{id} -- extracted so the two lists
+    cannot disagree about what a RunSummary is."""
+    return {
+        "id": str(run.id), "trigger": run.trigger.value, "status": run.status.value,
+        "started_at": run.started_at.isoformat() if run.started_at else None,
+        "duration_ms": run.duration_ms,
+        "cost_usd": float(run.cost_usd) if run.cost_usd is not None else None,
+        "llm_calls": run.llm_calls, "tool_calls": run.tool_calls, "error": run.error,
+    }
+
+
 @router.get("/runs", response_model=PageResponse[RunSummary])
 def admin_runs(
     principal: AdminPrincipal, db: DbSession, limit: int | None = None, offset: int | None = None,
@@ -130,13 +145,7 @@ def admin_runs(
     422. See that docstring for why."""
     page = queries.list_runs(db, limit=limit, offset=offset)
     return PageResponse(
-        items=[{
-            "id": str(r.id), "trigger": r.trigger.value, "status": r.status.value,
-            "started_at": r.started_at.isoformat() if r.started_at else None,
-            "duration_ms": r.duration_ms,
-            "cost_usd": float(r.cost_usd) if r.cost_usd is not None else None,
-            "llm_calls": r.llm_calls, "tool_calls": r.tool_calls, "error": r.error,
-        } for r in page.items],
+        items=[_run_list_row(r) for r in page.items],
         total=page.total, limit=page.limit, offset=page.offset,
     )
 
@@ -332,6 +341,32 @@ def admin_conversations(
     )
 
 
+@router.get("/conversations/{conversation_id}", response_model=ConversationDetail)
+def admin_conversation_detail(
+    conversation_id: uuid.UUID, principal: AdminPrincipal, db: DbSession,
+) -> ConversationDetail:
+    """Not audited, like every other admin read. The audit log records
+    mutating calls (spec 14); a row per detail view would bury real events
+    under navigation noise."""
+    from app.chat.schemas import transcript_of
+    from app.db.models import Conversation
+
+    conv = db.query(Conversation).filter(Conversation.id == conversation_id).one_or_none()
+    if conv is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "no such conversation")
+
+    return ConversationDetail(
+        conversation=ConversationSummary(
+            id=str(conv.id), title=conv.title, status=conv.status.value,
+            user_id=str(conv.user_id) if conv.user_id else None,
+            guest_name=conv.guest_name, guest_email=conv.guest_email,
+            created_at=conv.created_at.isoformat() if conv.created_at else None,
+        ),
+        messages=transcript_of(db, conversation_id),
+        runs=[RunSummary(**_run_list_row(run)) for run in queries.conversation_runs(db, conversation_id)],
+    )
+
+
 @router.get("/audit", response_model=PageResponse[AuditEntry])
 def admin_audit(
     principal: AdminPrincipal, db: DbSession, actor_id: str | None = None,
@@ -427,7 +462,7 @@ def admin_users(
     )
 
 
-@router.patch("/users/{user_id}")
+@router.patch("/users/{user_id}", response_model=UserPatchResult)
 def admin_patch_user(
     user_id: uuid.UUID, payload: UserPatch, principal: AdminPrincipal, db: DbSession,
 ) -> dict:
@@ -476,7 +511,7 @@ def admin_patch_user(
     }
 
 
-@router.post("/tickets/{ticket_id}/dossier")
+@router.post("/tickets/{ticket_id}/dossier", response_model=IncidentDossier)
 def admin_ticket_dossier(
     ticket_id: uuid.UUID, principal: AdminPrincipal, db: DbSession,
 ) -> dict:
@@ -568,29 +603,40 @@ def _audit_dossier(
     db.commit()
 
 
+def _lesson_row(lesson) -> dict:
+    """The `LessonSummary` shape, shared by the list endpoint and the PATCH
+    response -- extracted so the two cannot disagree about what a
+    LessonSummary is."""
+    return {
+        "id": str(lesson.id), "title": lesson.title, "category": lesson.category,
+        "content_md": lesson.content_md, "status": lesson.status.value,
+        "confidence": lesson.confidence.value,
+        "ticket_id": str(lesson.ticket_id) if lesson.ticket_id else None,
+        "created_at": lesson.created_at.isoformat() if lesson.created_at else None,
+    }
+
+
 @router.get("/lessons", response_model=PageResponse[LessonSummary])
 def admin_lessons(
     principal: AdminPrincipal, db: DbSession, limit: int | None = None, offset: int | None = None,
 ) -> PageResponse:
     page = queries.list_lessons(db, limit=limit, offset=offset)
     return PageResponse(
-        items=[{
-            "id": str(lesson.id), "title": lesson.title, "category": lesson.category,
-            "content_md": lesson.content_md, "status": lesson.status.value,
-            "confidence": lesson.confidence.value,
-            "ticket_id": str(lesson.ticket_id) if lesson.ticket_id else None,
-            "created_at": lesson.created_at.isoformat() if lesson.created_at else None,
-        } for lesson in page.items],
+        items=[_lesson_row(lesson) for lesson in page.items],
         total=page.total, limit=page.limit, offset=page.offset,
     )
 
 
-@router.patch("/lessons/{lesson_id}")
+@router.patch("/lessons/{lesson_id}", response_model=LessonSummary)
 def admin_patch_lesson(
     lesson_id: uuid.UUID, payload: LessonPatch, principal: AdminPrincipal, db: DbSession,
 ) -> dict:
     """Same single-transaction contract as admin_patch_user: flush the change,
-    stage the audit row, one commit."""
+    stage the audit row, one commit.
+
+    Returns the full LessonSummary, not just {id, status}, so the panel can
+    re-render the edited row from the response instead of re-fetching the
+    list."""
     lesson = db.query(Lesson).filter(Lesson.id == lesson_id).one_or_none()
     if lesson is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "no such lesson")
@@ -607,10 +653,10 @@ def admin_patch_lesson(
         payload={"status": lesson.status.value},
     )
     db.commit()
-    return {"id": str(lesson.id), "status": lesson.status.value}
+    return _lesson_row(lesson)
 
 
-@router.delete("/lessons/{lesson_id}")
+@router.delete("/lessons/{lesson_id}", response_model=LessonDeleteResult)
 def admin_archive_lesson(
     lesson_id: uuid.UUID, principal: AdminPrincipal, db: DbSession,
 ) -> dict:

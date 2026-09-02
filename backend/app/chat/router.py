@@ -10,6 +10,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.agent.loop import run_turn
+from app.chat.schemas import MessageView, transcript_of
 from app.chat.service import append_message, create_conversation, get_conversation, list_conversations, load_history, stage_message
 from app.config import get_settings
 from app.db.models import MessageRole
@@ -41,14 +42,22 @@ class ConversationResponse(BaseModel):
     id: str
     title: str | None
     status: str
+    messages: list[MessageView] = []
 
 
 class SendMessageRequest(BaseModel):
     content: str
 
 
-def _serialize(conv) -> ConversationResponse:
-    return ConversationResponse(id=str(conv.id), title=conv.title, status=conv.status.value)
+def _serialize(conv, messages: list[MessageView] | None = None) -> ConversationResponse:
+    """`messages` defaults to empty rather than being loaded here on purpose:
+    the list endpoint shares this serializer, and a sidebar of conversations
+    must not read the whole message table to render its titles. Only the
+    by-id endpoint passes a transcript."""
+    return ConversationResponse(
+        id=str(conv.id), title=conv.title, status=conv.status.value,
+        messages=messages or [],
+    )
 
 
 def build_attachment_blocks(db, conversation_id: uuid.UUID):
@@ -100,7 +109,7 @@ def get_conversation_endpoint(conversation_id: uuid.UUID, principal: CurrentPrin
     conv = get_conversation(db, principal, conversation_id)
     if conv is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "no such conversation")
-    return _serialize(conv)
+    return _serialize(conv, transcript_of(db, conversation_id))
 
 
 @router.post("/{conversation_id}/messages")

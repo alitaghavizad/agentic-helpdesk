@@ -586,7 +586,15 @@ def test_patching_a_lesson_updates_content_title_and_status_and_audits_it(client
     )
 
     assert response.status_code == 200, response.text
-    assert response.json() == {"id": str(lesson_id), "status": "archived"}
+    # The full LessonSummary, not just {id, status}: an intentional widening
+    # so the panel can re-render the edited row from this response.
+    assert response.json() == {
+        "id": str(lesson_id), "title": "Corrected", "category": lesson.category,
+        "content_md": "corrected body", "status": "archived",
+        "confidence": lesson.confidence.value,
+        "ticket_id": str(lesson.ticket_id) if lesson.ticket_id else None,
+        "created_at": lesson.created_at.isoformat() if lesson.created_at else None,
+    }
     db_session.expire_all()
     row = db_session.query(Lesson).filter(Lesson.id == lesson_id).one()
     assert row.content_md == "corrected body"
