@@ -395,6 +395,35 @@ def admin_patch_user(
     }
 
 
+@router.post("/tickets/{ticket_id}/dossier")
+def admin_ticket_dossier(
+    ticket_id: uuid.UUID, principal: AdminPrincipal, db: DbSession,
+) -> dict:
+    """Sync `def`, like the approvals routes and for the same reason: this
+    performs a multi-second blocking model call, and Starlette runs a sync
+    endpoint in a threadpool so that block cannot stall the event loop and
+    therefore cannot stall every open SSE stream.
+
+    The client is fetched only AFTER the ticket is found, so a 404 neither
+    requires an API key to be configured nor risks paying for a call with
+    nothing to summarise.
+    """
+    from app.admin.dossier import DossierFailed, build_dossier
+    from app.admin import dossier as dossier_module
+    from app.db.models import Ticket
+
+    ticket = db.query(Ticket).filter(Ticket.id == ticket_id).one_or_none()
+    if ticket is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "no such ticket")
+    try:
+        result = build_dossier(db, dossier_module._get_sync_client(), ticket)
+    except DossierFailed as exc:
+        # 502, not 500: the failure is upstream, and the distinction matters
+        # to whoever is reading the logs at 3am.
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc))
+    return result.model_dump()
+
+
 @router.get("/lessons", response_model=PageResponse)
 def admin_lessons(
     principal: AdminPrincipal, db: DbSession, limit: int | None = None, offset: int | None = None,
