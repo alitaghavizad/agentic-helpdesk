@@ -164,6 +164,30 @@ def test_a_trace_over_the_cap_is_capped_and_says_so(build):
     assert truncated is True
 
 
+def test_the_cap_stops_the_work_not_just_the_output(monkeypatch):
+    """A cap that trims the response after building the whole tree is not a
+    cap -- it is the same memory and the same CPU, discarded at the end.
+
+    This is a real defect this test was written for: _span_node used to
+    recurse into its own children, and _span_forest then overwrote the
+    `children` key it had just built. Every assertion about output shape
+    passed, because the output WAS correct. Only counting the work catches
+    it.
+    """
+    calls = []
+    real = admin_router._span_node
+    monkeypatch.setattr(
+        admin_router, "_span_node", lambda node: (calls.append(node), real(node))[1],
+    )
+
+    _roots, count, truncated = admin_router._span_forest(_deep_chain(600), cap=25)
+    assert count == 25 and truncated is True
+    assert len(calls) == 25, (
+        f"serialised {len(calls)} spans to return 25 -- the cap trimmed the "
+        "output but not the work"
+    )
+
+
 def test_a_truncated_trace_is_a_correct_prefix_not_a_shuffled_sample():
     """Depth-first, so each parent stays adjacent to the children it
     spawned. A breadth-first cut would return all 60 roots with none of

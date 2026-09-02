@@ -192,6 +192,13 @@ An over-large limit is a client bug, not an attack, and failing the request
 helps nobody. The cap is not decoration — there are already tens of
 thousands of spans and hundreds of runs in a development database.
 
+**`GET /runs/{id}/trace` is capped at 500 spans** and answers with
+`span_count` and a `truncated` flag. A trace is unbounded in the data — one
+run's tree measured 167,617 bytes here — and a silently shortened waterfall
+reads as a run that simply stopped. Spans are serialised depth-first, so a
+capped trace is a correct prefix of the real one rather than every root
+with none of its body.
+
 **Every mutation is audited**, and the audit row is written in the *same
 transaction* as the change it records. There is no window in which a role
 change is visible but unaudited.

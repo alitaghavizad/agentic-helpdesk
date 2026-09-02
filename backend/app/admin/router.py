@@ -199,9 +199,18 @@ def _run_summary(run) -> dict:
 
 
 def _span_node(node) -> dict:
-    """Recursive, matching the waterfall spec 15 describes. `input`/`output`
-    are already redacted at persistence time by tracing/redaction.py -- this
-    does not re-redact and must not be relied on to."""
+    """ONE span, with `children` left empty for the caller to fill.
+
+    Deliberately NOT recursive, which is a reversal worth explaining: it
+    used to recurse, and _span_forest then overwrote the `children` key it
+    had just built. The output was right and the cap was useless -- the
+    whole subtree was serialised and thrown away, so a trace large enough
+    to need capping still paid the full cost of building it. The recursion
+    lives in _span_forest now, where the cap can actually stop it.
+
+    `input`/`output` are already redacted at persistence time by
+    tracing/redaction.py -- this does not re-redact and must not be relied
+    on to."""
     s = node.span
     return {
         "id": str(s.id), "kind": s.kind.value, "name": s.name, "status": s.status.value,
@@ -210,7 +219,7 @@ def _span_node(node) -> dict:
         "cache_read_tokens": s.cache_read_tokens, "cache_write_tokens": s.cache_write_tokens,
         "cost_usd": float(s.cost_usd) if s.cost_usd is not None else None,
         "input": s.input, "output": s.output, "error": s.error,
-        "children": [_span_node(c) for c in node.children],
+        "children": [],
     }
 
 
