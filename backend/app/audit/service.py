@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from sqlalchemy.orm import Session
 
 from app.db.models import ActorType, AuditLog
@@ -46,6 +48,13 @@ def record_audit(
         target_id=target_id,
         payload=payload if payload is not None else {},
         ip_address=ip_address,
+        # Set explicitly rather than left to the column's server_default.
+        # func.now() is Postgres TRANSACTION-start time, so several audit rows
+        # written by one mutation would share a byte-identical timestamp and
+        # ordering would fall through to a random uuid4 tiebreaker -- in the
+        # one table whose whole purpose is being read in order. Stamped here
+        # instead, per call.
+        created_at=datetime.now(timezone.utc),
     )
     db.add(row)
     db.flush()

@@ -158,3 +158,100 @@ agent's tool catalog entirely rather than being offered and then failing.
 (FastAPI still parses and spools the full multipart body first, the same as
 it does for every upload — the `503` is only guaranteed before our own
 attachment store is touched.)
+
+## Phase 8a: admin API and the incident dossier
+
+Every screen the Phase 8b panel will render has an endpoint behind it. All
+of them are under `/api/admin` and all of them require the `admin` role —
+an employee, a helpdesk user, and a guest each get `403`, an anonymous
+caller `401`.
+
+| Endpoint | What it answers |
+| --- | --- |
+| `GET /overview` | Today's runs, spend, error rate, cache hit rate |
+| `GET /costs` | Spend by day and by model |
+| `GET /runs` | Run history |
+| `GET /runs/{id}/trace` | One run's full span tree |
+| `GET /runs/stream` | Live run activity (SSE) |
+| `GET /conversations` | Conversations, searchable by participant |
+| `GET /audit` | The audit log, filterable by action and date range |
+| `GET /users` | User accounts |
+| `PATCH /users/{id}` | Change a user's role, clearance, or active flag |
+| `GET /lessons` | Learned lessons |
+| `PATCH /lessons/{id}` | Correct a lesson's text, title, or status |
+| `DELETE /lessons/{id}` | Archive a lesson |
+| `GET /approvals`, `POST /approvals/{id}/decide` | Phase 6's approval queue |
+| `POST /tickets/{id}/dossier` | Build an incident dossier |
+
+**Pagination.** Every list endpoint takes `limit` and `offset` (default
+`50`) and answers with `{items, total, limit, offset}` — `total` is the
+count *before* the window, so a client can render a pager without walking
+the whole result set. `limit` is capped at **200**, and an over-large value
+is **clamped, not rejected**: asking for 10,000 gets you 200, not a `422`.
+An over-large limit is a client bug, not an attack, and failing the request
+helps nobody. The cap is not decoration — there are already tens of
+thousands of spans and hundreds of runs in a development database.
+
+**`GET /runs/{id}/trace` is capped at 500 spans** and answers with
+`span_count` and a `truncated` flag. A trace is unbounded in the data — one
+run's tree measured 167,617 bytes here — and a silently shortened waterfall
+reads as a run that simply stopped. Spans are serialised depth-first, so a
+capped trace is a correct prefix of the real one rather than every root
+with none of its body.
+
+**Every mutation is audited**, and the audit row is written in the *same
+transaction* as the change it records. There is no window in which a role
+change is visible but unaudited.
+
+**`DELETE /lessons/{id}` archives, it does not delete.** A lesson is
+evidence of what the system learned and why it behaved as it did; deleting
+the row would remove the explanation for past behaviour while leaving that
+behaviour in place. A second `DELETE` on an already-archived lesson returns
+`200` with the same body rather than `409` — the verb states a desired end
+state and that state already holds. The second audit row is still written:
+an admin issued the request, which is true whether or not the row changed,
+and suppressing it because the write was a no-op is how an audit trail
+starts lying by omission.
+
+**The live run stream is single-worker**, for the same reason as the
+notification stream — it reuses that same in-process broker, subscribing
+every admin to one fixed sentinel channel rather than standing up a second
+pub/sub. `finalize_run` publishes *after* its commit, so a subscriber is
+never told about a finalisation that then rolled back. The endpoint holds
+no database session at all: an SSE response completes only when the client
+disconnects, so a session it had read through would sit `idle in
+transaction` for the life of the stream, and roughly fifteen such streams
+exhaust the connection pool. There is no backlog to replay — run history
+comes from `GET /runs`.
+
+**The dossier is schema-validated.** `POST /tickets/{id}/dossier` runs a
+traced Claude call through `client.messages.parse` against the
+`IncidentDossier` model. A dossier that does not validate is an **error**,
+not a plausible-looking fabrication, because an admin acts on what it says:
+a schema violation, a transport failure, or a response carrying nothing
+parsed all surface as `502` with the reason, never as a half-built object.
+The conversation transcript reaches the model wrapped in
+`<untrusted_data ... trust="none">` — it contains whatever a user typed and
+whatever an attachment said — while the instructions live in the `system`
+turn, so anything instruction-shaped in the user turn arrived with the data
+and is not ours. The cost figures are read from the run row and overwrite
+whatever the model returns: they are facts already held exactly, and a
+transcription slip in a cost figure is indistinguishable from a real one
+once it is rendered as a card.
+
+**Empty tables are expected.** `tickets`, `lessons`, and `audit_log` start
+empty on a fresh database and fill as the system is used, so the Tickets,
+Lessons, and Audit screens are legitimately blank until something has
+happened. `users` is seeded (126 rows); `runs` and `conversations` fill as
+soon as anyone chats.
+
+**Live dossier check.** One opt-in test makes a real, paid Anthropic call
+and is excluded from the default run:
+
+```bash
+uv run pytest tests/test_admin_dossier_live.py -v -s -m live_dossier
+```
+
+It is the only test that proves a real model can fill the schema — every
+other dossier test stubs the client and would stay green against a schema
+no model could satisfy.

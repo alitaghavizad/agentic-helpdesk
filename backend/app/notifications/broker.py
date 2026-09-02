@@ -30,6 +30,21 @@ from collections import defaultdict
 
 _DEFAULT_MAX_QUEUE = 100
 
+# A fixed sentinel channel every admin subscribes to for live run activity
+# (spec 15's Traces screen). The broker is keyed by UUID and does not care
+# whether a key is a real user id, so reusing it here avoids a second
+# pub/sub -- and avoids rediscovering the three defects this one already
+# paid for: cross-thread queue access, a dropped subscriber hanging
+# forever, and a lossy window between subscribing and reading a backlog.
+#
+# Not a random uuid4 generated at import time: under multiple workers each
+# process would pick a different one, and the constant is also what a test
+# asserts against. Collision with a real users.id is not a practical
+# concern (uuid4 values are random over 122 bits), and even a collision
+# would only mean an admin's own notifications reached the runs stream,
+# not a leak in the other direction.
+ADMIN_RUNS_CHANNEL = uuid.UUID("00000000-0000-0000-0000-0000000ad313")
+
 _subscribers: dict[uuid.UUID, set["Subscription"]] = defaultdict(set)
 
 

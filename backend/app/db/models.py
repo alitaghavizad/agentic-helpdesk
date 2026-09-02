@@ -261,7 +261,11 @@ class Conversation(Base):
         SAEnum(ConversationStatus, name="conversation_status", values_callable=lambda x: [e.value for e in x]), nullable=False,
         default=ConversationStatus.ACTIVE,
     )
-    created_at: Mapped[datetime] = mapped_column(server_default=func.now(), nullable=False)
+    # Indexed: the admin conversation list's ORDER BY. See migration
+    # f9824ef578ed.
+    created_at: Mapped[datetime] = mapped_column(
+        server_default=func.now(), nullable=False, index=True,
+    )
     updated_at: Mapped[datetime] = mapped_column(
         server_default=func.now(), onupdate=func.now(), nullable=False
     )
@@ -414,7 +418,11 @@ class Run(Base):
     status: Mapped[RunStatus] = mapped_column(
         SAEnum(RunStatus, name="run_status", values_callable=lambda x: [e.value for e in x]), nullable=False, default=RunStatus.RUNNING
     )
-    started_at: Mapped[datetime] = mapped_column(server_default=func.now(), nullable=False)
+    # Indexed: the admin run list's ORDER BY, and every overview counter is a
+    # `started_at >= start-of-today` scan. See migration f9824ef578ed.
+    started_at: Mapped[datetime] = mapped_column(
+        server_default=func.now(), nullable=False, index=True,
+    )
     ended_at: Mapped[datetime | None] = mapped_column(nullable=True)
     duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     input_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -462,13 +470,19 @@ class AuditLog(Base):
 
     id: Mapped[uuid.UUID] = _uuid_pk()
     actor_type: Mapped[ActorType] = mapped_column(SAEnum(ActorType, name="actor_type", values_callable=lambda x: [e.value for e in x]), nullable=False)
-    actor_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    action: Mapped[str] = mapped_column(String(255), nullable=False)
-    target_type: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Indexed: every one of these is a filter column on the admin audit list,
+    # over a table spec 5.4 makes append-only (it only ever grows). See
+    # migration f9824ef578ed.
+    actor_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    action: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    target_type: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     target_id: Mapped[str] = mapped_column(String(255), nullable=False)
     payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     ip_address: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(server_default=func.now(), nullable=False)
+    # Indexed: the audit list's ORDER BY and its date-range filter.
+    created_at: Mapped[datetime] = mapped_column(
+        server_default=func.now(), nullable=False, index=True,
+    )
 
 
 class UsageCounter(Base):

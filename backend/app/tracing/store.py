@@ -15,7 +15,17 @@ def insert_run(
 ) -> uuid.UUID:
     Session = get_sessionmaker()
     with Session() as session:
-        run = Run(trigger=trigger, status=RunStatus.RUNNING, conversation_id=conversation_id, user_id=user_id)
+        run = Run(
+            trigger=trigger, status=RunStatus.RUNNING,
+            conversation_id=conversation_id, user_id=user_id,
+            # Set explicitly rather than left to the column's server_default.
+            # Postgres's now() is the TRANSACTION start time, so any two runs
+            # opened inside one transaction would share a byte-identical
+            # started_at and the admin run list would fall through to ordering
+            # by a random uuid4. This path commits per run so that is rare
+            # today, but the ordering must not depend on that staying true.
+            started_at=datetime.now(timezone.utc),
+        )
         session.add(run)
         session.commit()
         return run.id
@@ -93,7 +103,13 @@ def finalize_run(*, run_id: uuid.UUID, status: RunStatus, error: str | None) -> 
 
         ended_at = datetime.now(timezone.utc)
         run.status = status
-        run.error = error
+        # Redacted, exactly as insert_span redacts a span's error and for the
+        # same reason: this string is built from an exception's own message,
+        # which routinely embeds a secret ("AuthError: invalid key sk-..."),
+        # and the dossier path feeds it raw transport errors. The omission was
+        # latent until phase 8a put run.error on the wire through GET /runs
+        # and GET /runs/{id}/trace, where a secret becomes copy-pasteable.
+        run.error = redact(error) if error is not None else None
         run.ended_at = ended_at
         run.duration_ms = int((ended_at - run.started_at).total_seconds() * 1000)
         run.input_tokens = sum(s.input_tokens or 0 for s in spans)
@@ -104,7 +120,26 @@ def finalize_run(*, run_id: uuid.UUID, status: RunStatus, error: str | None) -> 
         run.cost_usd = sum(priced) if priced else None
         run.llm_calls = sum(1 for s in spans if s.kind == SpanKind.LLM)
         run.tool_calls = sum(1 for s in spans if s.kind == SpanKind.TOOL)
+
+        # Built BEFORE the commit, published AFTER it. Assembling it first
+        # avoids re-reading every attribute back out of the database (the
+        # sessionmaker expires instances on commit); publishing after means
+        # a subscriber can never be told about a finalisation that then
+        # rolled back. `broker` imports nothing from this project, so the
+        # local import only guards against an import cycle appearing later.
+        event = {
+            "type": "run_finished",
+            "id": str(run.id),
+            "trigger": run.trigger.value,
+            "status": run.status.value,
+            "duration_ms": run.duration_ms,
+            "cost_usd": float(run.cost_usd) if run.cost_usd is not None else None,
+        }
         session.commit()
+
+    from app.notifications import broker
+
+    broker.publish(broker.ADMIN_RUNS_CHANNEL, event)
 
 
 @dataclass

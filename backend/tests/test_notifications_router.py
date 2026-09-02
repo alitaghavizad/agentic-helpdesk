@@ -387,14 +387,24 @@ async def test_a_replayed_and_published_event_with_the_same_id_arrives_once(clie
 
 @pytest.mark.asyncio
 async def test_a_dropped_subscriber_closes_the_stream_instead_of_hanging(client, db_session):
-    """Regression test for the `except broker.SubscriberDropped: return`
-    clause. Verified load-bearing by deleting that clause and confirming
-    this test then fails with a timeout (see task-8-report.md): without
-    it, the SubscriberDropped raised once the 100 buffered events are
-    drained propagates out of the generator uncaught, and
-    _LiveASGITransport deliberately does not fake a clean end of body for
-    that case (see its docstring) -- so the stream just hangs instead of
-    closing, and the bounded read below times out instead of completing.
+    """What the CLIENT observes when it falls behind: the 100 events that
+    were buffered before the drop, and then an end of stream rather than a
+    wedge.
+
+    This test NO LONGER pins the `except broker.SubscriberDropped: return`
+    clause, and the claim that it does has been removed rather than left
+    to mislead. It was true when written in phase 6, and phase 7 silently
+    took it away: app/main.py gained a `@app.middleware("http")` for the
+    upload size cap, i.e. Starlette's BaseHTTPMiddleware, which runs the
+    downstream app as its own task and closes the client-facing body when
+    that task ends -- whether it ended by returning or by raising. So an
+    escaping SubscriberDropped now looks identical from out here, and this
+    test passes with the clause deleted (measured, phase 8a).
+
+    test_a_dropped_subscriber_ends_the_generator_instead_of_raising below
+    is what pins the clause now. This one is kept for the client-visible
+    contract: it would still catch a stream that stops producing without
+    ever closing.
 
     Overflows the broker's default 100-slot queue (see
     app/notifications/broker.py's _DEFAULT_MAX_QUEUE) with a burst of
@@ -425,6 +435,62 @@ async def test_a_dropped_subscriber_closes_the_stream_instead_of_hanging(client,
 
             await asyncio.wait_for(_drain(), timeout=5)
             assert len(received) == 100
+
+
+@pytest.mark.asyncio
+async def test_a_dropped_subscriber_ends_the_generator_instead_of_raising(db_session):
+    """The replacement regression test for `except broker.SubscriberDropped:
+    return`, asserted where the difference is still visible -- on the
+    generator, below the middleware that now normalises the two cases (see
+    the test above for that history).
+
+    With the clause, the iterator is exhausted; without it,
+    SubscriberDropped comes out here. Verified in both directions.
+
+    Uses a real user with no unread notifications, so the backlog read is
+    empty and the generator parks on subscription.get() after subscribing.
+    """
+    from app.auth.security import hash_password
+    from app.notifications.router import stream_notifications
+    from app.rbac.policy import Principal
+
+    user = User(
+        username=f"nd{uuid.uuid4().hex[:12]}", email="nd@northstar.example",
+        full_name="Notif Dropped", password_hash=hash_password("Passw0rd!dev"),
+        role=Role.EMPLOYEE,
+    )
+    db_session.add(user)
+    db_session.commit()
+
+    response = await stream_notifications(
+        Principal(
+            kind="user", user_id=str(user.id), role=Role.EMPLOYEE.value,
+            clearance=None, department=None, employee_ref=None, helpdesk_ref=None,
+        ),
+    )
+    iterator = response.body_iterator.__aiter__()
+
+    # Starting the generator is what subscribes it; publishing to a channel
+    # with no subscribers is a no-op and would leave nothing to drop.
+    first = asyncio.ensure_future(iterator.__anext__())
+    for _ in range(20):
+        await asyncio.sleep(0)
+        if broker.subscriber_count(user.id):
+            break
+    assert broker.subscriber_count(user.id) == 1
+
+    for i in range(150):
+        broker.publish(user.id, {"type": "ticket_created", "id": str(i), "title": f"n{i}", "body": "b"})
+
+    delivered = [await asyncio.wait_for(first, timeout=5)]
+    with pytest.raises(StopAsyncIteration):
+        while True:
+            delivered.append(await asyncio.wait_for(iterator.__anext__(), timeout=5))
+
+    assert len(delivered) == 100
+    assert broker.subscriber_count(user.id) == 0, (
+        "the subscription must be released when the stream closes"
+    )
 
 
 @pytest.mark.asyncio
