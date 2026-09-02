@@ -1,122 +1,76 @@
-import { useState } from 'react'
-import heroImg from './assets/hero.png'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
-import './App.css'
+import { Navigate, Outlet, Route, Routes } from "react-router-dom";
+import { landingFor, useAuth } from "./auth/AuthContext";
+import { RequireRole } from "./auth/RequireRole";
+import { NavBar } from "./components/NavBar";
+import { Login } from "./pages/Login";
 
-function App() {
-  const [count, setCount] = useState(0)
-
+/** NavBar plus the routed page. Only signed-in routes get a shell. */
+function Shell() {
   return (
-    <>
-      <section id="center">
-        <div className="hero">
-          <img src={heroImg} className="base" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
-        </div>
-        <div>
-          <h1>Get started</h1>
-          <p>
-            Edit <code>src/App.tsx</code> and save to test <code>HMR</code>
-          </p>
-        </div>
-        <button
-          type="button"
-          className="counter"
-          onClick={() => setCount((count) => count + 1)}
-        >
-          Count is {count}
-        </button>
-      </section>
-
-      <div className="ticks"></div>
-
-      <section id="next-steps">
-        <div id="docs">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#documentation-icon"></use>
-          </svg>
-          <h2>Documentation</h2>
-          <p>Your questions, answered</p>
-          <ul>
-            <li>
-              <a href="https://vite.dev/" target="_blank">
-                <img className="logo" src={viteLogo} alt="" />
-                Explore Vite
-              </a>
-            </li>
-            <li>
-              <a href="https://react.dev/" target="_blank">
-                <img className="button-icon" src={reactLogo} alt="" />
-                Learn more
-              </a>
-            </li>
-          </ul>
-        </div>
-        <div id="social">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#social-icon"></use>
-          </svg>
-          <h2>Connect with us</h2>
-          <p>Join the Vite community</p>
-          <ul>
-            <li>
-              <a href="https://github.com/vitejs/vite" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#github-icon"></use>
-                </svg>
-                GitHub
-              </a>
-            </li>
-            <li>
-              <a href="https://chat.vite.dev/" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#discord-icon"></use>
-                </svg>
-                Discord
-              </a>
-            </li>
-            <li>
-              <a href="https://x.com/vite_js" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#x-icon"></use>
-                </svg>
-                X.com
-              </a>
-            </li>
-            <li>
-              <a href="https://bsky.app/profile/vite.dev" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#bluesky-icon"></use>
-                </svg>
-                Bluesky
-              </a>
-            </li>
-          </ul>
-        </div>
-      </section>
-
-      <div className="ticks"></div>
-      <section id="spacer"></section>
-    </>
-  )
+    <div className="min-h-screen bg-slate-50">
+      <NavBar />
+      <main className="mx-auto max-w-6xl p-6">
+        <Outlet />
+      </main>
+    </div>
+  );
 }
 
-export default App
+/**
+ * A screen this task does not build yet -- tasks 3-5 replace these one
+ * route at a time. Keeping the route wired now (rather than leaving it
+ * missing) is what lets RequireRole and the nav links be exercised end to
+ * end before the data screens exist.
+ */
+function Placeholder({ title }: { title: string }) {
+  return (
+    <div className="rounded border border-dashed border-slate-300 p-8 text-center text-slate-500">
+      <p className="text-sm font-medium text-slate-700">{title}</p>
+      <p className="mt-1 text-sm">This screen is not built yet.</p>
+    </div>
+  );
+}
+
+function Home() {
+  const { status, principal } = useAuth();
+  if (status === "loading") return null;
+  return <Navigate to={principal ? landingFor(principal) : "/login"} replace />;
+}
+
+function NotFound() {
+  return (
+    <div className="flex min-h-screen items-center justify-center text-slate-500">
+      <p>Page not found.</p>
+    </div>
+  );
+}
+
+function App() {
+  return (
+    <Routes>
+      <Route path="/login" element={<Login />} />
+      <Route path="/" element={<Home />} />
+
+      <Route element={<RequireRole><Shell /></RequireRole>}>
+        <Route path="/chat" element={<Placeholder title="Chat" />} />
+        <Route path="/tickets" element={<Placeholder title="Tickets" />} />
+      </Route>
+
+      <Route path="/admin/*" element={<RequireRole role="admin"><Shell /></RequireRole>}>
+        <Route index element={<Placeholder title="Admin overview" />} />
+        <Route path="conversations" element={<Placeholder title="Admin conversations" />} />
+        <Route path="traces" element={<Placeholder title="Admin traces" />} />
+        <Route path="approvals" element={<Placeholder title="Admin approvals" />} />
+        <Route path="tickets" element={<Placeholder title="Admin tickets" />} />
+        <Route path="users" element={<Placeholder title="Admin users" />} />
+        <Route path="lessons" element={<Placeholder title="Admin lessons" />} />
+        <Route path="audit" element={<Placeholder title="Admin audit" />} />
+        <Route path="costs" element={<Placeholder title="Admin costs" />} />
+      </Route>
+
+      <Route path="*" element={<NotFound />} />
+    </Routes>
+  );
+}
+
+export default App;
