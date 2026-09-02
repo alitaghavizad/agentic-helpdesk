@@ -20,6 +20,10 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.admin import queries
+from app.admin.schemas import (
+    AuditEntry, ConversationSummary, Costs, LessonSummary, Overview, PageResponse,
+    RunSummary, RunTrace, SpanNode, TraceRun, UserSummary,
+)
 from app.approvals import service as approvals
 from app.audit.service import record_audit
 from app.db.models import (
@@ -104,27 +108,19 @@ def decide_approval(
 
 # ---- Read endpoints (spec 15) ------------------------------------------------------
 
-class PageResponse(BaseModel):
-    """One envelope for every list endpoint. `total` is the count BEFORE
-    limit/offset, so a client can render a pager without walking the whole
-    result set."""
-    items: list[dict]
-    total: int
-    limit: int
-    offset: int
 
 
-@router.get("/overview")
+@router.get("/overview", response_model=Overview)
 def admin_overview(principal: AdminPrincipal, db: DbSession) -> dict:
     return queries.overview(db)
 
 
-@router.get("/costs")
+@router.get("/costs", response_model=Costs)
 def admin_costs(principal: AdminPrincipal, db: DbSession) -> dict:
     return queries.costs(db)
 
 
-@router.get("/runs", response_model=PageResponse)
+@router.get("/runs", response_model=PageResponse[RunSummary])
 def admin_runs(
     principal: AdminPrincipal, db: DbSession, limit: int | None = None, offset: int | None = None,
 ) -> PageResponse:
@@ -218,11 +214,65 @@ def _span_node(node) -> dict:
     }
 
 
-@router.get("/runs/{run_id}/trace")
-def admin_run_trace(run_id: uuid.UUID, principal: AdminPrincipal, db: DbSession) -> dict:
-    """Takes `db` only to keep the signature uniform with its neighbours --
-    trace_tree opens its own session by design (app/tracing/store.py), because
-    a trace must be readable independently of any business transaction.
+# A trace is unbounded in the data. One run's tree measured 167,617 bytes
+# against this development database, and an agentic run with a long tool
+# loop has no ceiling at all -- the panel would be asked to parse and lay
+# out the whole thing in one response. The cap is generous enough that no
+# ordinary run reaches it (the largest here has well under a hundred
+# spans), so in practice it bounds only the pathological case.
+_MAX_TRACE_SPANS = 500
+
+
+def _span_forest(roots, cap: int) -> tuple[list[dict], int, bool]:
+    """Serialises the waterfall depth-first, stopping after `cap` spans.
+
+    Depth-first rather than breadth-first because the result is read as a
+    waterfall: keeping each parent adjacent to the children it spawned
+    means a truncated trace is a correct prefix of the real one, whereas a
+    breadth-first cut would return every root with none of their bodies.
+
+    Returns the nodes actually emitted, the number emitted, and whether
+    anything was dropped -- the flag matters because a silently shortened
+    waterfall reads as a run that simply stopped.
+    """
+    emitted = 0
+    truncated = False
+
+    def _walk(node) -> dict | None:
+        nonlocal emitted, truncated
+        if emitted >= cap:
+            truncated = True
+            return None
+        emitted += 1
+        payload = _span_node(node)
+        children = []
+        for child in node.children:
+            serialised = _walk(child)
+            if serialised is None:
+                break
+            children.append(serialised)
+        payload["children"] = children
+        return payload
+
+    out = []
+    for root in roots:
+        serialised = _walk(root)
+        if serialised is None:
+            break
+        out.append(serialised)
+    return out, emitted, truncated
+
+
+@router.get("/runs/{run_id}/trace", response_model=RunTrace)
+def admin_run_trace(run_id: uuid.UUID, principal: AdminPrincipal) -> dict:
+    """Takes NO `db: DbSession`: trace_tree opens its own session by design
+    (app/tracing/store.py), because a trace must be readable independently
+    of any business transaction, so the dependency here was declared and
+    never used. Measured, so as not to overstate it: an unused Session
+    checks nothing out of the pool -- SQLAlchemy acquires a connection
+    lazily, on the first statement -- so this cost nothing today. It is
+    removed because it was one `db.query(...)` away from costing a pooled
+    connection per request for a read that already has its own.
 
     trace_tree raises ValueError for an unknown run id; that is the only
     ValueError it can raise, so translating it to 404 cannot mask an
@@ -231,10 +281,16 @@ def admin_run_trace(run_id: uuid.UUID, principal: AdminPrincipal, db: DbSession)
         tree = trace_tree(run_id)
     except ValueError:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "no such run")
-    return {"run": _run_summary(tree.run), "roots": [_span_node(n) for n in tree.roots]}
+    roots, span_count, truncated = _span_forest(tree.roots, _MAX_TRACE_SPANS)
+    return {
+        "run": _run_summary(tree.run),
+        "roots": roots,
+        "span_count": span_count,
+        "truncated": truncated,
+    }
 
 
-@router.get("/conversations", response_model=PageResponse)
+@router.get("/conversations", response_model=PageResponse[ConversationSummary])
 def admin_conversations(
     principal: AdminPrincipal, db: DbSession, q: str | None = None,
     limit: int | None = None, offset: int | None = None,
@@ -251,7 +307,7 @@ def admin_conversations(
     )
 
 
-@router.get("/audit", response_model=PageResponse)
+@router.get("/audit", response_model=PageResponse[AuditEntry])
 def admin_audit(
     principal: AdminPrincipal, db: DbSession, actor_id: str | None = None,
     action: str | None = None, target_type: str | None = None,
@@ -312,7 +368,7 @@ class LessonPatch(BaseModel):
     status: LessonStatus | None = None
 
 
-@router.get("/users", response_model=PageResponse)
+@router.get("/users", response_model=PageResponse[UserSummary])
 def admin_users(
     principal: AdminPrincipal, db: DbSession, limit: int | None = None, offset: int | None = None,
 ) -> PageResponse:
@@ -424,7 +480,7 @@ def admin_ticket_dossier(
     return result.model_dump()
 
 
-@router.get("/lessons", response_model=PageResponse)
+@router.get("/lessons", response_model=PageResponse[LessonSummary])
 def admin_lessons(
     principal: AdminPrincipal, db: DbSession, limit: int | None = None, offset: int | None = None,
 ) -> PageResponse:

@@ -204,7 +204,8 @@ def test_run_trace_returns_a_nested_span_tree(client, db_session, cleanup_run):
         response = client.get(f"/api/admin/runs/{run_id}/trace", headers=headers)
         assert response.status_code == 200, response.text
         body = response.json()
-        assert set(body) == {"run", "roots"}
+        assert set(body) == {"run", "roots", "span_count", "truncated"}
+        assert body["span_count"] == 2 and body["truncated"] is False
         assert body["run"]["id"] == str(run_id)
 
         # Exactly one root: the child must be nested UNDER the parent, not
