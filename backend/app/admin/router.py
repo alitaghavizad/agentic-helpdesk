@@ -480,13 +480,55 @@ def admin_ticket_dossier(
     ticket = db.query(Ticket).filter(Ticket.id == ticket_id).one_or_none()
     if ticket is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "no such ticket")
+
     try:
         result = build_dossier(db, dossier_module._get_sync_client(), ticket)
     except DossierFailed as exc:
+        # Rollback FIRST. build_dossier reads through this session, so a
+        # database error inside it would leave the session poisoned and
+        # turn the audit write below into a 500 that buries the real
+        # upstream failure -- the shape of the phase 6 defect where a
+        # handler's DB error stopped an approval ever being marked failed.
+        # There is nothing in this transaction worth keeping: the endpoint
+        # only read.
+        db.rollback()
+        _audit_dossier(db, principal, ticket_id, outcome="failed", detail=str(exc))
         # 502, not 500: the failure is upstream, and the distinction matters
         # to whoever is reading the logs at 3am.
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc))
+
+    _audit_dossier(db, principal, ticket_id, outcome="ok")
     return result.model_dump()
+
+
+def _audit_dossier(
+    db, principal, ticket_id: uuid.UUID, *, outcome: str, detail: str | None = None,
+) -> None:
+    """Audited even though building a dossier mutates nothing.
+
+    It is a read, so the gate's "every mutation is audited" clause does not
+    reach it -- but it is the one read on this surface that discloses a
+    whole conversation transcript, including whatever a user typed and
+    whatever an attachment said, and it spends real money doing so. Those
+    are exactly the questions an audit log exists to answer afterwards:
+    who pulled this transcript, and when.
+
+    Failures are recorded too, not just successes. The transcript reached
+    the model and the call was billed whether or not a valid dossier came
+    back, so an audit trail that only showed successes would understate
+    both the disclosure and the spend.
+    """
+    payload = {"outcome": outcome}
+    if detail is not None:
+        # Bounded: DossierFailed can carry a whole pydantic ValidationError,
+        # and the audit log is not the place to store one in full.
+        payload["detail"] = detail[:500]
+    record_audit(
+        db, actor_type=ActorType.USER, actor_id=principal.user_id,
+        action="dossier.built", target_type="ticket", target_id=str(ticket_id),
+        payload=payload,
+    )
+    db.commit()
 
 
 @router.get("/lessons", response_model=PageResponse[LessonSummary])

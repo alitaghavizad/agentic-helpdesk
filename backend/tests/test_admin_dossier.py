@@ -470,6 +470,96 @@ def test_an_upstream_failure_is_a_502_not_a_500(client, db_session, monkeypatch)
     assert "upstream exploded" in response.json()["detail"]
 
 
+def test_a_successful_dossier_is_audited(client, db_session, monkeypatch):
+    """Not a mutation, so the gate's audit clause does not reach it -- but
+    it is the one read on this surface that discloses a whole transcript
+    and bills the org for doing so."""
+    from app.db.models import AuditLog
+
+    ticket = _committed_ticket()
+    admin, headers = _login(
+        client, db_session, username=f"do{uuid.uuid4().hex[:12]}", role=Role.ADMIN,
+    )
+    monkeypatch.setattr(
+        dossier_module, "_get_sync_client", lambda: _FakeClient(result=_valid_dossier()),
+    )
+    before = db_session.query(AuditLog).count()
+
+    assert client.post(
+        f"/api/admin/tickets/{ticket.id}/dossier", headers=headers,
+    ).status_code == 200
+
+    rows = db_session.query(AuditLog).order_by(AuditLog.created_at.asc()).all()
+    assert len(rows) - before == 1
+    row = rows[-1]
+    assert row.action == "dossier.built"
+    assert row.target_type == "ticket" and row.target_id == str(ticket.id)
+    assert str(row.actor_id) == str(admin.id)
+    assert row.payload["outcome"] == "ok"
+
+
+def test_a_failed_dossier_is_audited_too(client, db_session, monkeypatch):
+    """The transcript reached the model and the call was billed whether or
+    not a valid dossier came back. An audit trail showing only successes
+    would understate both the disclosure and the spend."""
+    from app.db.models import AuditLog
+
+    ticket = _committed_ticket()
+    _u, headers = _login(
+        client, db_session, username=f"do{uuid.uuid4().hex[:12]}", role=Role.ADMIN,
+    )
+    monkeypatch.setattr(
+        dossier_module, "_get_sync_client",
+        lambda: _FakeClient(raises=RuntimeError("upstream exploded")),
+    )
+    before = db_session.query(AuditLog).count()
+
+    assert client.post(
+        f"/api/admin/tickets/{ticket.id}/dossier", headers=headers,
+    ).status_code == 502
+
+    rows = db_session.query(AuditLog).order_by(AuditLog.created_at.asc()).all()
+    assert len(rows) - before == 1
+    assert rows[-1].action == "dossier.built"
+    assert rows[-1].payload["outcome"] == "failed"
+    assert "upstream exploded" in rows[-1].payload["detail"]
+
+
+def test_a_dossier_audit_detail_is_bounded(client, db_session, monkeypatch):
+    """DossierFailed can carry a whole pydantic ValidationError. The audit
+    log is not the place to store one in full."""
+    from app.db.models import AuditLog
+
+    ticket = _committed_ticket()
+    _u, headers = _login(
+        client, db_session, username=f"do{uuid.uuid4().hex[:12]}", role=Role.ADMIN,
+    )
+    monkeypatch.setattr(
+        dossier_module, "_get_sync_client",
+        lambda: _FakeClient(raises=RuntimeError("x" * 5000)),
+    )
+
+    client.post(f"/api/admin/tickets/{ticket.id}/dossier", headers=headers)
+    row = db_session.query(AuditLog).order_by(AuditLog.created_at.desc()).first()
+    assert len(row.payload["detail"]) <= 500
+
+
+def test_an_unknown_ticket_is_not_audited(client, db_session):
+    """Nothing was disclosed and nothing was spent. An audit row here would
+    let anyone with the admin role pad the log with entries for tickets
+    that never existed."""
+    from app.db.models import AuditLog
+
+    _u, headers = _login(
+        client, db_session, username=f"do{uuid.uuid4().hex[:12]}", role=Role.ADMIN,
+    )
+    before = db_session.query(AuditLog).count()
+    assert client.post(
+        f"/api/admin/tickets/{uuid.uuid4()}/dossier", headers=headers,
+    ).status_code == 404
+    assert db_session.query(AuditLog).count() == before
+
+
 def test_the_endpoint_does_not_construct_a_client_when_the_ticket_is_missing(
     client, db_session, monkeypatch,
 ):
