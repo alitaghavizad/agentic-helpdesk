@@ -160,6 +160,11 @@ describe("Chat", () => {
     await userEvent.type(screen.getByLabelText("Message"), "Hi there");
     await userEvent.click(screen.getByRole("button", { name: /send/i }));
 
+    // The typed message must not vanish from the transcript for the whole
+    // turn just because the stored transcript hasn't refetched yet -- a
+    // turn can run for tens of seconds.
+    expect(await screen.findByText("Hi there")).toBeInTheDocument();
+
     await waitFor(() => expect(stream).toBeDefined());
     await act(async () => {
       stream!.send({ type: "token", text: "Hel" });
@@ -210,15 +215,35 @@ describe("Chat", () => {
     expect(link).toHaveAttribute("href", "/tickets");
   });
 
-  it("shows a view-trace link for an admin after done, but not for a non-admin", async () => {
+  it("renders a completed turn's answer and trace link exactly once, even when the invalidated refetch resolves immediately", async () => {
+    // Regression for a race in an earlier version: the reset that hides the
+    // live bubble once a turn's answer lands in the stored transcript used
+    // to be gated on `conversationQuery.dataUpdatedAt` advancing past a
+    // timestamp captured from an effect. When the invalidated refetch
+    // resolved before React committed the `done` render (exactly what
+    // happens here -- every mocked call in this suite resolves on the next
+    // microtask, same as a fast local backend would), that comparison was
+    // never satisfied and the live bubble never cleared: the completed
+    // answer and the admin's trace link both rendered twice, permanently.
+    // This also covers Step 3's "admin sees a view-trace link after done,
+    // a non-admin does not," now pinned against a fixture that actually
+    // persists the turn (rather than one where the refetch stays empty
+    // forever, which cannot detect this race).
     async function run(principal: unknown) {
       let stream: ReturnType<typeof makeTurnStream> | undefined;
+      let detailCalls = 0;
       fetchMock.mockReset();
       fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
         const u = String(url);
         if (u.endsWith("/api/conversations")) return jsonResponse(CONV_LIST);
         if (u.endsWith("/api/conversations/c1") && init?.method === undefined) {
-          return jsonResponse(conversationDetail("c1", []));
+          detailCalls += 1;
+          if (detailCalls === 1) return jsonResponse(conversationDetail("c1", []));
+          // The refetch `done` triggers, with this turn's answer now persisted.
+          return jsonResponse(conversationDetail("c1", [
+            { id: "m-user", role: "user", content: "Status?", created_at: "2026-09-02T09:00:00Z", run_id: null },
+            { id: "m-assistant", role: "assistant", content: [{ type: "text", text: "All good." }], created_at: "2026-09-02T09:00:05Z", run_id: "r-77" },
+          ]));
         }
         if (u.endsWith("/api/conversations/c1/messages") && init?.method === "POST") {
           stream = makeTurnStream((init.signal as AbortSignal) ?? undefined);
@@ -237,20 +262,87 @@ describe("Chat", () => {
 
       await act(async () => {
         stream!.send({ type: "token", text: "All good." });
-        stream!.send({ type: "done", run_id: "r-42" });
+        stream!.send({ type: "done", run_id: "r-77" });
+        stream!.close();
       });
+
+      // Let the invalidated query's refetch resolve and commit.
+      await waitFor(() => expect(detailCalls).toBeGreaterThan(1));
 
       return view;
     }
 
     const admin = await run(ADMIN);
-    await waitFor(() => expect(screen.getByText(/view trace/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getAllByText("All good.")).toHaveLength(1));
+    expect(screen.getAllByText(/view trace/i)).toHaveLength(1);
     admin.unmount();
 
     const employee = await run(EMPLOYEE);
-    await waitFor(() => expect(screen.getByText("All good.")).toBeInTheDocument());
-    expect(screen.queryByText(/view trace/i)).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getAllByText("All good.")).toHaveLength(1));
+    expect(screen.queryAllByText(/view trace/i)).toHaveLength(0);
     employee.unmount();
+  });
+
+  it("renders a view-trace link from a persisted message's own run_id for an admin, with no live turn involved", async () => {
+    // The two-source trace-link design's whole justification is that this
+    // link survives a reload -- i.e. it must come from `message.run_id` on
+    // the stored transcript alone, not from any turn state.
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const u = String(url);
+      if (u.endsWith("/api/conversations")) return jsonResponse(CONV_LIST);
+      if (u.endsWith("/api/conversations/c1") && init?.method === undefined) {
+        return jsonResponse(conversationDetail("c1", [
+          { id: "m1", role: "user", content: "Ping", created_at: "2026-09-01T10:00:00Z", run_id: null },
+          { id: "m2", role: "assistant", content: [{ type: "text", text: "Pong" }], created_at: "2026-09-01T10:00:05Z", run_id: "r-99" },
+        ]));
+      }
+      throw new Error(`unexpected call: ${u}`);
+    });
+
+    renderChat(ADMIN);
+    await screen.findByText("VPN issue");
+    await userEvent.click(screen.getByText("VPN issue"));
+
+    await screen.findByText("Pong");
+    expect(screen.getByText(/view trace/i)).toBeInTheDocument();
+  });
+
+  it("keeps the partial answer on screen when an error arrives mid-turn", async () => {
+    // The backend emits `error` mid-turn (budget exceeded, refusal) and
+    // still always emits `done` afterward (its `finally` block) -- but the
+    // text streamed before the error must stay next to it, not be replaced
+    // or blanked. turnReducer.test.ts pins the state; this pins the render.
+    let stream: ReturnType<typeof makeTurnStream> | undefined;
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const u = String(url);
+      if (u.endsWith("/api/conversations")) return jsonResponse(CONV_LIST);
+      if (u.endsWith("/api/conversations/c1") && init?.method === undefined) {
+        return jsonResponse(conversationDetail("c1", []));
+      }
+      if (u.endsWith("/api/conversations/c1/messages") && init?.method === "POST") {
+        stream = makeTurnStream((init.signal as AbortSignal) ?? undefined);
+        return stream.response;
+      }
+      throw new Error(`unexpected call: ${u} ${init?.method}`);
+    });
+
+    renderChat();
+    await screen.findByText("VPN issue");
+    await userEvent.click(screen.getByText("VPN issue"));
+    await screen.findByText(/no messages yet/i);
+    await userEvent.type(screen.getByLabelText("Message"), "Budget check");
+    await userEvent.click(screen.getByRole("button", { name: /send/i }));
+    await waitFor(() => expect(stream).toBeDefined());
+
+    await act(async () => {
+      stream!.send({ type: "token", text: "Partial answer" });
+      stream!.send({ type: "error", message: "Turn ended: budget." });
+      stream!.send({ type: "done", run_id: "r-err" });
+      stream!.close();
+    });
+
+    expect(await screen.findByText("Partial answer")).toBeInTheDocument();
+    expect(screen.getByText("Turn ended: budget.")).toBeInTheDocument();
   });
 
   it("disables the composer while a turn is in flight", async () => {

@@ -108,31 +108,37 @@ export function Chat() {
   });
 
   const { turn, busy, send, reset } = useChatTurn(selectedId);
+  const [pendingUserContent, setPendingUserContent] = useState<string | null>(null);
 
   // Switching conversations must not leave a previous conversation's live
-  // turn bleeding into the newly selected one's transcript panel.
+  // turn (or its optimistic user bubble) bleeding into the newly selected
+  // one's transcript panel.
   useEffect(() => {
     reset();
+    setPendingUserContent(null);
   }, [selectedId, reset]);
 
-  // Once the turn has finished and the stored transcript has actually been
-  // refetched with it folded in, drop the streamed overlay -- otherwise the
-  // last turn would render twice: once from the refreshed transcript, once
-  // still sitting in local turn state. The admin trace link survives this
-  // (and a reload) regardless, because it renders again below from the
-  // persisted message's own `run_id` once the refetch lands.
-  const awaitingRefetchSince = useRef<number | null>(null);
+  const messages: MessageView[] = conversationQuery.data?.messages ?? [];
+
+  // Whether THIS turn's answer is already in the refetched transcript --
+  // computed straight from data, not from a timestamp. An earlier version
+  // gated this on `conversationQuery.dataUpdatedAt` advancing past a
+  // timestamp recorded from an effect; when the invalidated refetch
+  // resolved before React committed the `done` render, that comparison was
+  // never satisfied and the live bubble (answer + trace link) rendered
+  // forever alongside the now-identical stored message. Reading the
+  // transcript directly has no such window: it is simply true or false on
+  // every render, synchronously, from whatever `messages` currently holds.
+  const turnPersisted = turn.done && turn.runId !== null
+    && messages.some((message) => message.run_id === turn.runId);
+
+  // Once the turn's answer is persisted, its optimistic user bubble is too
+  // (the user message is staged and committed before the turn even starts
+  // running -- backend/app/chat/router.py's send_message_endpoint), so both
+  // clear together.
   useEffect(() => {
-    if (turn.done && awaitingRefetchSince.current === null) {
-      awaitingRefetchSince.current = conversationQuery.dataUpdatedAt;
-    }
-  }, [turn.done, conversationQuery.dataUpdatedAt]);
-  useEffect(() => {
-    if (awaitingRefetchSince.current !== null && conversationQuery.dataUpdatedAt > awaitingRefetchSince.current) {
-      awaitingRefetchSince.current = null;
-      reset();
-    }
-  }, [conversationQuery.dataUpdatedAt, reset]);
+    if (turnPersisted) setPendingUserContent(null);
+  }, [turnPersisted]);
 
   async function handleNewConversation() {
     const created = await chat.createConversation();
@@ -145,6 +151,11 @@ export function Chat() {
     const content = draft.trim();
     if (!content || !selectedId || busy) return;
     setDraft("");
+    // Optimistic: the composer clears immediately, but a turn can run for
+    // tens of seconds, and the user's own question should not vanish from
+    // the transcript for that whole window just because the stored
+    // transcript hasn't been refetched yet.
+    setPendingUserContent(content);
     await send(content);
   }
 
@@ -164,8 +175,9 @@ export function Chat() {
     }
   }
 
-  const messages: MessageView[] = conversationQuery.data?.messages ?? [];
-  const showLiveTurn = busy || turn.text.length > 0 || turn.tools.length > 0 || turn.outcomes.length > 0 || turn.error !== null;
+  const showLiveTurn = !turnPersisted
+    && (busy || turn.text.length > 0 || turn.tools.length > 0 || turn.outcomes.length > 0 || turn.error !== null);
+  const showPendingUser = pendingUserContent !== null && !turnPersisted;
 
   return (
     <div className="grid grid-cols-1 gap-6 md:grid-cols-[16rem_1fr]">
@@ -202,7 +214,7 @@ export function Chat() {
                 <StateBlock status="loading" />
               ) : conversationQuery.isError ? (
                 <StateBlock status="error" message={describeError(conversationQuery.error)} />
-              ) : messages.length === 0 && !showLiveTurn ? (
+              ) : messages.length === 0 && !showLiveTurn && !showPendingUser ? (
                 <StateBlock status="empty" emptyLabel="No messages yet. Say hello below." />
               ) : (
                 <ul className="space-y-3">
@@ -224,6 +236,13 @@ export function Chat() {
                       )}
                     </li>
                   ))}
+
+                  {showPendingUser && (
+                    <li className="rounded bg-slate-100 p-3 text-sm text-slate-900" aria-label="you, sending">
+                      <p className="mb-1 text-xs font-medium uppercase tracking-wide text-slate-500">you</p>
+                      <p className="whitespace-pre-wrap">{pendingUserContent}</p>
+                    </li>
+                  )}
 
                   {showLiveTurn && (
                     <li className="rounded bg-blue-50 p-3 text-sm text-slate-900" aria-label="assistant, streaming">
