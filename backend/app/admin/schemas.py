@@ -65,13 +65,17 @@ class ConversationSummary(BaseModel):
 
 
 class AuditEntry(BaseModel):
+    """`target_type`, `target_id` and `payload` are NOT NULL in the table, so
+    they are not optional here. A published schema looser than the data makes
+    every consumer write a null check for a case that cannot occur.
+    `actor_id` and `ip_address` genuinely are nullable."""
     id: str
     actor_type: str
     actor_id: str | None
     action: str
-    target_type: str | None
-    target_id: str | None
-    payload: dict[str, Any] | None
+    target_type: str
+    target_id: str
+    payload: dict[str, Any]
     ip_address: str | None
     created_at: str | None
 

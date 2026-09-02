@@ -517,6 +517,26 @@ def test_audit_since_and_until_together_select_a_half_open_window(client, db_ses
     assert empty["items"] == [] and empty["total"] == 0
 
 
+def test_conversation_search_ignores_surrounding_whitespace(client, db_session):
+    """`?q=%20printer%20` must find what `?q=printer` finds. The guard tested
+    `q.strip()` while the pattern was built from the raw value, so a search
+    box that trailed a space returned an empty table -- indistinguishable
+    from "no such conversation"."""
+    _user, headers = _admin(client, db_session)
+    marker = f"Printer-{uuid.uuid4().hex[:8]}"
+    db_session.add(Conversation(guest_name="G", guest_email="g@example.com", title=marker))
+    db_session.commit()
+
+    tight = client.get("/api/admin/conversations", params={"q": marker}, headers=headers).json()
+    padded = client.get(
+        "/api/admin/conversations", params={"q": f"  {marker}  "}, headers=headers,
+    ).json()
+
+    assert [i["title"] for i in tight["items"]] == [marker]
+    assert [i["title"] for i in padded["items"]] == [marker]
+    assert padded["total"] == tight["total"] == 1
+
+
 def test_audit_a_naive_date_bound_is_read_as_utc(client, db_session):
     """`?since=2026-08-29T00:00:00` with no offset parses into a NAIVE
     datetime. The column is timestamptz, so a naive bind would be interpreted

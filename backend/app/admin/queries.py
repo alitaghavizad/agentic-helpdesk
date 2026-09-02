@@ -250,7 +250,11 @@ def list_conversations(
     # what a search box should do when it is cleared, and spelling it out here
     # makes it a decision rather than the accidental falsiness of `if q:`.
     if q and q.strip():
-        pattern = _contains(q)
+        # The STRIPPED term, matching what was just tested. Searching the raw
+        # value made `?q=%20printer%20` look for " printer " and find nothing,
+        # so a search box that trailed a space silently returned an empty
+        # table -- indistinguishable from "no such conversation".
+        pattern = _contains(q.strip())
         query = query.filter(
             Conversation.title.ilike(pattern, escape=_LIKE_ESCAPE)
             | Conversation.guest_name.ilike(pattern, escape=_LIKE_ESCAPE)
