@@ -103,7 +103,13 @@ def finalize_run(*, run_id: uuid.UUID, status: RunStatus, error: str | None) -> 
 
         ended_at = datetime.now(timezone.utc)
         run.status = status
-        run.error = error
+        # Redacted, exactly as insert_span redacts a span's error and for the
+        # same reason: this string is built from an exception's own message,
+        # which routinely embeds a secret ("AuthError: invalid key sk-..."),
+        # and the dossier path feeds it raw transport errors. The omission was
+        # latent until phase 8a put run.error on the wire through GET /runs
+        # and GET /runs/{id}/trace, where a secret becomes copy-pasteable.
+        run.error = redact(error) if error is not None else None
         run.ended_at = ended_at
         run.duration_ms = int((ended_at - run.started_at).total_seconds() * 1000)
         run.input_tokens = sum(s.input_tokens or 0 for s in spans)

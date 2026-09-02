@@ -231,8 +231,18 @@ def _span_node(node) -> dict:
 # spans), so in practice it bounds only the pathological case.
 _MAX_TRACE_SPANS = 500
 
+# Depth needs its own bound, and not for display reasons. The response is
+# validated against schemas.SpanNode, whose `children` is self-referential,
+# and pydantic-core refuses to validate a structure nested past 99 --
+# `recursion_loop`, surfacing as a ResponseValidationError and an HTTP 500
+# from the very endpoint the span cap exists to keep answering. The span
+# cap alone does not help: 150 spans in one chain is 150 deep and well
+# under 500. Set below the limit with room to spare, since nothing in this
+# database is deeper than 2 and anything approaching it is pathological.
+_MAX_TRACE_DEPTH = 50
 
-def _span_forest(roots, cap: int) -> tuple[list[dict], int, bool]:
+
+def _span_forest(roots, cap: int, max_depth: int = _MAX_TRACE_DEPTH) -> tuple[list[dict], int, bool]:
     """Serialises the waterfall depth-first, stopping after `cap` spans.
 
     Depth-first rather than breadth-first because the result is read as a
@@ -247,7 +257,7 @@ def _span_forest(roots, cap: int) -> tuple[list[dict], int, bool]:
     emitted = 0
     truncated = False
 
-    def _walk(node) -> dict | None:
+    def _walk(node, depth: int) -> dict | None:
         nonlocal emitted, truncated
         if emitted >= cap:
             truncated = True
@@ -255,17 +265,23 @@ def _span_forest(roots, cap: int) -> tuple[list[dict], int, bool]:
         emitted += 1
         payload = _span_node(node)
         children = []
-        for child in node.children:
-            serialised = _walk(child)
-            if serialised is None:
-                break
-            children.append(serialised)
+        if depth + 1 < max_depth:
+            for child in node.children:
+                serialised = _walk(child, depth + 1)
+                if serialised is None:
+                    break
+                children.append(serialised)
+        elif node.children:
+            # Deeper than the response model can carry. The node itself is
+            # kept and its subtree dropped, which is why the flag matters:
+            # without it this reads as a span that called nothing.
+            truncated = True
         payload["children"] = children
         return payload
 
     out = []
     for root in roots:
-        serialised = _walk(root)
+        serialised = _walk(root, 0)
         if serialised is None:
             break
         out.append(serialised)
@@ -473,29 +489,50 @@ def admin_ticket_dossier(
     requires an API key to be configured nor risks paying for a call with
     nothing to summarise.
     """
-    from app.admin.dossier import DossierFailed, build_dossier
     from app.admin import dossier as dossier_module
+    from app.admin.dossier import DossierFailed, build_dossier, gather_material
     from app.db.models import Ticket
 
     ticket = db.query(Ticket).filter(Ticket.id == ticket_id).one_or_none()
     if ticket is None:
+        # Not audited: nothing was disclosed and nothing was spent, and a
+        # row here would let any admin pad the log with entries for tickets
+        # that never existed.
         raise HTTPException(status.HTTP_404_NOT_FOUND, "no such ticket")
 
+    material = gather_material(db, ticket)
+
+    # RELEASE THE CONNECTION BEFORE THE MODEL CALL. Everything above read
+    # through `db`, which holds a pooled connection and an open transaction
+    # until this commit. The call below takes tens of seconds (36.5s on
+    # this project's own live run) and itself needs a second connection for
+    # the run it traces, so holding this one across it means concurrent
+    # dossier builds deadlock against their own pool -- measured on a real
+    # server: 20 concurrent builds, 7 of them 500 after the 30s pool
+    # timeout, 14 backends sitting `idle in transaction`. There is nothing
+    # to lose by committing: this handler only read.
+    db.commit()
+
     try:
-        result = build_dossier(db, dossier_module._get_sync_client(), ticket)
-    except DossierFailed as exc:
-        # Rollback FIRST. build_dossier reads through this session, so a
-        # database error inside it would leave the session poisoned and
-        # turn the audit write below into a 500 that buries the real
-        # upstream failure -- the shape of the phase 6 defect where a
-        # handler's DB error stopped an approval ever being marked failed.
-        # There is nothing in this transaction worth keeping: the endpoint
-        # only read.
+        result = build_dossier(dossier_module._get_sync_client(), material)
+    except Exception as exc:  # noqa: BLE001 -- re-raised below, never swallowed
+        # Catches Exception, not just DossierFailed. The audit row records a
+        # disclosure and a spend that have already happened by the time most
+        # failures surface, so a narrower catch would skip it on exactly the
+        # paths that most need it.
+        #
+        # Rollback FIRST: a database error would leave this session poisoned
+        # and turn the audit write into a 500 that buries the real failure --
+        # the shape of the phase 6 defect where a handler's DB error stopped
+        # an approval ever being marked failed.
         db.rollback()
         _audit_dossier(db, principal, ticket_id, outcome="failed", detail=str(exc))
-        # 502, not 500: the failure is upstream, and the distinction matters
-        # to whoever is reading the logs at 3am.
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc))
+        if isinstance(exc, DossierFailed):
+            # 502, not 500: the failure is upstream, and the distinction
+            # matters to whoever is reading the logs at 3am.
+            raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+        # Anything else is our bug, and a 500 is the honest answer.
+        raise
 
     _audit_dossier(db, principal, ticket_id, outcome="ok")
     return result.model_dump()

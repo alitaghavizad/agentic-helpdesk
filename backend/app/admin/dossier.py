@@ -6,12 +6,22 @@ dossier that does not validate is therefore an error, never a partial
 object. That is why this uses `client.messages.parse` against a Pydantic
 model rather than generating prose and hoping to parse it afterwards.
 
-Knows nothing about HTTP -- it takes a Session, a client and a Ticket, and
-raises DossierFailed for every failure mode. Turning that into a status
-code is the router's job.
+Knows nothing about HTTP, and raises DossierFailed for every failure mode;
+turning that into a status code is the router's job.
+
+Split deliberately in two. `gather_material` does every database read and
+hands back a plain object; `build_dossier` makes the model call and never
+touches a Session. That lets the caller commit and release its pooled
+connection before a call that takes tens of seconds -- without the split,
+concurrent builds hold a backend `idle in transaction` for the duration
+AND need a second connection for the run they trace, so they deadlock
+against their own pool.
 """
 from __future__ import annotations
 
+import logging
+import uuid
+from dataclasses import dataclass
 from typing import Any
 
 import anthropic
@@ -22,6 +32,8 @@ from app.agent.guardrails import wrap_untrusted
 from app.config import get_settings
 from app.db.models import Message, Run, RunStatus, RunTrigger, Span, Task, Ticket
 from app.tracing.spans import end_run, start_run
+
+logger = logging.getLogger(__name__)
 
 # Matches app/agent/loop.py rather than picking independently: a dossier
 # summarising an incident is doing the same kind of reasoning as the agent
@@ -221,12 +233,73 @@ def _render_material(ticket: Ticket, material: dict[str, Any], cost: CostSummary
     return "\n".join(lines)
 
 
-def build_dossier(db: Session, client: Any, ticket: Ticket) -> IncidentDossier:
+@dataclass(frozen=True)
+class DossierMaterial:
+    """Everything the model call needs, carrying NO database handle.
+
+    This split is the whole point of the two-function shape. The model call
+    takes tens of seconds -- 36.5s on this project's own live run -- and the
+    caller must be able to let go of its database transaction before making
+    it. See build_dossier's docstring for what happens when it cannot.
+    """
+    conversation_id: uuid.UUID
+    content: str
+    cost: CostSummary
+
+
+def gather_material(db: Session, ticket: Ticket) -> DossierMaterial:
+    """Reads everything the dossier needs, so the caller can then release
+    its transaction. Every database access in this module happens here."""
     material = _gather(db, ticket)
     cost = _true_cost_summary(material["run"])
-    content = _render_material(ticket, material, cost)
+    return DossierMaterial(
+        conversation_id=ticket.conversation_id,
+        content=_render_material(ticket, material, cost),
+        cost=cost,
+    )
 
-    handle = start_run(RunTrigger.DOSSIER, conversation_id=ticket.conversation_id)
+
+def _end_run_quietly(handle, *, status: RunStatus, error: str | None = None) -> None:
+    """Finalises the run, and swallows a failure to do so.
+
+    Tracing is observability, not the product. If `end_run` fails after the
+    model call already succeeded and was billed, letting that exception out
+    would turn a paid, complete dossier into a 500 and lose it -- trading a
+    real result for a bookkeeping record. The run is left RUNNING in that
+    case, which is the lesser harm and is logged so it is not silent.
+    """
+    try:
+        end_run(handle, status=status, error=error)
+    except Exception:  # noqa: BLE001 -- see docstring; never re-raised
+        logger.exception(
+            "failed to finalize dossier run %s; it stays RUNNING", handle.run_id,
+        )
+
+
+def build_dossier(client: Any, material: DossierMaterial) -> IncidentDossier:
+    """Takes NO Session, deliberately.
+
+    A request that held its pooled connection across this call would keep a
+    Postgres backend `idle in transaction` for the whole model call, and
+    would then need a SECOND connection for start_run below -- so concurrent
+    dossier builds deadlock against their own pool
+    (pool_size=5 + max_overflow=10) and 500 after the 30s pool timeout.
+    Measured, on a real server: 20 concurrent builds produced 7 such 500s
+    and 14 backends idle in transaction. The caller reads its material
+    first, commits, and only then calls this.
+
+    Every failure leaves as DossierFailed, including one raised before the
+    model call: a caller that only catches DossierFailed would otherwise
+    skip its rollback and its audit row on exactly the paths where the
+    transcript was already disclosed and the call already billed.
+    """
+    try:
+        handle = start_run(RunTrigger.DOSSIER, conversation_id=material.conversation_id)
+    except Exception as exc:  # noqa: BLE001 -- one exit type, see docstring
+        raise DossierFailed(f"could not start a dossier run: {exc}") from exc
+
+    content = material.content
+    cost = material.cost
     try:
         response = client.messages.parse(
             model=_MODEL,
@@ -240,10 +313,10 @@ def build_dossier(db: Session, client: Any, ticket: Ticket) -> IncidentDossier:
             output_format=IncidentDossier,
         )
     except ValidationError as exc:
-        end_run(handle, status=RunStatus.ERROR, error=f"schema violation: {exc}")
+        _end_run_quietly(handle, status=RunStatus.ERROR, error=f"schema violation: {exc}")
         raise DossierFailed(f"the model's dossier did not validate: {exc}") from exc
     except Exception as exc:  # noqa: BLE001 -- surfaced as DossierFailed, never a 500
-        end_run(handle, status=RunStatus.ERROR, error=f"{type(exc).__name__}: {exc}")
+        _end_run_quietly(handle, status=RunStatus.ERROR, error=f"{type(exc).__name__}: {exc}")
         raise DossierFailed(f"{type(exc).__name__}: {exc}") from exc
 
     parsed = getattr(response, "parsed_output", None)
@@ -251,9 +324,9 @@ def build_dossier(db: Session, client: Any, ticket: Ticket) -> IncidentDossier:
         # A 200 with nothing parsed: a refusal, or a stop_reason of
         # max_tokens that ended the structured output early. Either way
         # there is no dossier, and the run is an error like any other.
-        end_run(handle, status=RunStatus.ERROR, error="no parsed dossier in the response")
+        _end_run_quietly(handle, status=RunStatus.ERROR, error="no parsed dossier in the response")
         raise DossierFailed("the model returned no parsed dossier")
 
-    end_run(handle, status=RunStatus.OK)
+    _end_run_quietly(handle, status=RunStatus.OK)
     # See _true_cost_summary: the figures come from the row, not the model.
     return parsed.model_copy(update={"cost_summary": cost})

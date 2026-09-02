@@ -22,6 +22,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
+from sqlalchemy import text as sa_text
 
 from app.admin import queries
 from app.db.models import (
@@ -237,11 +238,21 @@ def test_an_unknown_run_trace_is_404(client, db_session):
 
 
 def test_audit_over_an_empty_table_is_an_empty_page_not_an_error(client, db_session):
-    """audit_log is empty at the start of this phase. An empty list is a 200
-    with zero items and a well-formed envelope, never a 404 and never a bare
-    array."""
+    """An empty result is a 200 with zero items and a well-formed envelope,
+    never a 404 and never a bare array.
+
+    Emptiness is created by filtering on an action nobody will ever write,
+    NOT by assuming the table is empty. It used to assert `total == 0`
+    against the whole table -- true only while audit_log happened to be
+    empty, and spec 5.4 gives that table no delete path, so the first real
+    admin action against a database would have broken this permanently.
+    (It did: a reviewer's 64 rows turned it into the suite's only failure.)
+    """
     _user, headers = _admin(client, db_session)
-    response = client.get("/api/admin/audit", headers=headers)
+    response = client.get(
+        "/api/admin/audit", params={"action": f"never.written.{uuid.uuid4().hex}"},
+        headers=headers,
+    )
     assert response.status_code == 200, response.text
     body = response.json()
     assert set(body) == {"items", "total", "limit", "offset"}
@@ -511,8 +522,16 @@ def test_audit_a_naive_date_bound_is_read_as_utc(client, db_session):
     datetime. The column is timestamptz, so a naive bind would be interpreted
     in the database session's TimeZone; queries._as_utc defines it as UTC
     instead. Asserted by giving the naive and the aware form of the same
-    instant and requiring the same answer."""
+    instant and requiring the same answer.
+
+    THE SESSION TIMEZONE IS FORCED OFF UTC FIRST, and that is what makes
+    this test mean anything. The development database runs `Etc/UTC`, so a
+    naive bind is already interpreted as UTC and both forms agree whether
+    or not _as_utc exists -- measured: deleting the _as_utc calls left this
+    test green. Under America/New_York the two forms differ by five hours,
+    so only the conversion can make them agree."""
     _user, headers = _admin(client, db_session)
+    db_session.execute(sa_text("SET LOCAL TIME ZONE 'America/New_York'"))
     action = f"range.naive.{uuid.uuid4().hex[:8]}"
     _older, newer = _audit_pair(db_session, action)
 
