@@ -371,16 +371,88 @@ reload`, `/admin renders against seeded data` — every assertion on
 16/16 passing. Both runs' full output are in
 `.superpowers/sdd/2026-09-02-admin-panel-frontend/task-12-report.md`.
 
-**A real defect the gate caught and the fix applied.** `AuthContext`'s
-boot effect called `auth.refresh()` directly instead of through
-`client.ts`'s shared `refreshInFlight` mutex. React StrictMode
-double-invokes effects in development, so every page load fired two real
-`POST /api/auth/refresh` requests against the same single-use, rotated
-refresh cookie — the first succeeded, the second always 401'd. `screens.spec.ts`'s
-zero-failed-calls assertion caught this on every screen; `AuthContext`'s
-boot effect now goes through the same `refreshOnce()` mutex `client.ts`
-already uses to de-duplicate concurrent 401 retries, collapsing the pair
-back to one request.
+**Two mechanical defects in the gate itself, found on review and fixed.**
+An independent review of this task caught two problems in `screens.spec.ts`
+that meant the "zero failed API calls" half of the check had never actually
+fired in this suite — both are covered by their own deliberate-break/
+restore proof, in `task-12-report.md`'s "Review round 2" section:
+
+1. `expect(failures).toEqual([])` originally ran immediately after the
+   marker became visible, with no guarantee the `response` event for every
+   call the screen made had already reached the test's listener — a race,
+   not a check. Fixed by waiting (`expect.poll`) until every `/api/` request
+   the screen started has also `requestfinished`/`requestfailed` before
+   reading `failures`. Proved by breaking `GET /api/notifications` (a call
+   every admin screen makes that has nothing to do with any screen's own
+   marker) and confirming all 11 `screens.spec.ts` tests failed via the
+   `failures` assertion specifically — not a marker timeout — then
+   restoring it and confirming 16/16 again.
+2. `/admin/audit`'s marker (`/actor/i`) and plain `/tickets`'s marker
+   (`/ticket/i`) both matched a *static* label that renders regardless of
+   whether the screen's data call succeeded — "Actor ID" (a filter label)
+   and "Tickets" (the page's own `<h1>`), respectively — so either screen
+   would have passed even with its data endpoint fully broken. Changed to
+   `/ip address|no matching entries/i` and `/priority|no tickets to
+   show/i`: both are column headers gated behind the same success branch as
+   every other screen's marker, or the screen's own legitimate empty-state
+   copy. Proved by breaking `GET /api/admin/audit` and confirming
+   `/admin/audit` (and only that screen) now fails on the marker itself,
+   then restoring it and confirming 16/16 again.
+
+While fixing (1), a live SSE stream (the run-activity feed `/admin` and
+`/admin/traces` open, and the notification feed every screen opens) turned
+out unable to be waited on with the same `requestfinished` check — it
+never completes while the connection is healthy and open. Streams are
+excluded from that wait (a broken stream's own status is not caught by
+this file, though every screen's actual content comes from an ordinary
+REST call, which the exclusion does not touch). One more real bug turned
+up chasing an intermittent timeout while diagnosing this: the exclusion
+had matched on the URL containing the substring `/api/` anywhere, which
+also matches Vite's own dev-server module requests
+(`http://localhost:5173/src/api/client.ts` and friends — this project's
+frontend source happens to live under `src/api/`); an occasional slow
+Vite transform on one of those was occasionally responsible for the
+`/admin`/`/admin/traces` settle-wait timing out for reasons having nothing
+to do with the backend. Fixed by requiring the frontend dev server's own
+origin (`localhost:5173`) to be excluded, not just matching the substring.
+A residual, low-frequency timing flake remains in the settle-wait under
+full-suite load on this dev machine (roughly 1 run in 5–9, always the poll
+timing out, never a wrong `failures` result) — `playwright.config.ts` now
+sets `retries: 1` to absorb it; a retry re-runs the identical assertions
+against the identical backend, so it does not change what is checked, and
+every deliberate-break proof above was reproduced with zero retries in
+play.
+
+**Correction on the auth boot-refresh fix (this task's own review
+caught an over-claim in an earlier draft of this report).** `AuthContext`'s
+boot effect was changed to call the shared `refreshOnce()` mutex in
+`client.ts` instead of `auth.refresh()` directly, so that React
+StrictMode's dev-mode double-invoke of that effect shares one in-flight
+refresh request instead of firing two. This part is real and independently
+reproducible: with the fix reverted, a probe consistently shows two
+concurrent `POST /api/auth/refresh` requests on a single page load; with
+it applied, one. **What did not hold up:** an earlier version of this
+report claimed the second of those two requests "always 401'd" and that
+this caused every one of `screens.spec.ts`'s 13 then-failing tests —
+reverting *only* this fix, with every other change in this round applied,
+leaves the suite at 16/16. The 401s actually observed while building this
+gate were the `/login` page's own legitimate no-cookie boot check (a brand
+new browser context has no refresh cookie yet), which is what the
+separate "signed in before the failure listener attaches" ordering in
+`screens.spec.ts` fixes — that fix is what the 13 failures were really
+about. The refresh-mutex change is kept because it removes a genuine,
+independently-verified latent race (two real requests where one would do),
+not because it is covered by a failing-then-passing test in this suite —
+it is not, and this section says so rather than implying otherwise.
+
+**Known follow-up, not fixed in this task.**
+`backend/app/auth/router.py`'s refresh-token rotation (around lines
+130-137) takes no row lock, so two concurrent refresh requests presenting
+the same token can both succeed rather than the second correctly failing
+against an already-rotated token. This is a real latent backend
+concurrency issue, found while investigating the correction above; it is
+backend work outside this frontend-gate task's scope and is recorded here
+as worth its own ticket.
 
 **What could not be verified.** The dossier button (`POST
 /tickets/{id}/dossier`, ~36s, a real Claude API call) and a completed chat

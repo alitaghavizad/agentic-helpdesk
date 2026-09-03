@@ -11,7 +11,15 @@ export default defineConfig({
   testDir: "./tests/e2e",
   fullyParallel: false,
   workers: 1,
-  retries: 0,
+  // One retry absorbs occasional real-machine timing noise in the
+  // `screens.spec.ts` settle-wait (observed roughly once per 5-9 full-suite
+  // runs on this dev machine, always as a poll timeout, never as a wrong
+  // `failures` result) -- see task-12-report.md's finding-1 section. This
+  // does not weaken what is checked: a retry re-runs the exact same
+  // assertions against the exact same backend, so a genuinely broken
+  // endpoint fails every attempt identically, as proven there by three
+  // repeated break/restore cycles with zero retries in play.
+  retries: 1,
   reporter: "list",
   use: {
     baseURL: "http://localhost:5173",
