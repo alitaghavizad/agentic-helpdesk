@@ -17,8 +17,8 @@ from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
 from app.db.models import (
-    ApprovalRequest, ApprovalStatus, AuditLog, Conversation, Run, RunStatus, Span, Ticket,
-    TicketStatus, User,
+    ApprovalRequest, ApprovalStatus, AuditLog, Conversation, Run, RunStatus, Span, SpanKind,
+    Ticket, TicketStatus, User,
 )
 
 MAX_LIMIT = 200
@@ -195,11 +195,20 @@ def costs(db: Session) -> dict[str, Any]:
     # conversation -- report a near-perfect hit rate while barely benefiting
     # from caching at all. Guarded for a fresh install.
     denominator = int(input_tokens) + int(cache_read) + int(cache_write)
-    # Summed from by_model rather than a second query: by_model is already
-    # grouped over every span with a model (the same population this count
-    # needs), so summing its per-model counts cannot drift from a
-    # separately-written aggregate that means to count the same thing.
-    unpriced_calls = sum(row["unpriced_calls"] for row in by_model)
+    # Its own query, deliberately NOT a sum over by_model's rows: by_model
+    # filters Span.model.isnot(None), which excludes exactly the case this
+    # count most needs to catch. app/agent/loop.py's turn loop opens
+    # `span(SpanKind.LLM, ...)` before calling the model; if that call
+    # raises, record_usage() (which sets both `model` and `cost_usd`) never
+    # runs, and the span persists as kind=LLM, model=NULL, cost_usd=NULL --
+    # a real LLM call whose cost is unknown, which is precisely what this
+    # feature exists to surface. Filtering on `kind == LLM` (not on `model`)
+    # is what catches it; a NULL-model TOOL/MCP/etc. span never attempted a
+    # priced call at all (app/tracing/spans.py only prices when the
+    # recorder has a model) and must stay excluded.
+    unpriced_calls = db.query(func.count(Span.id)).filter(
+        Span.kind == SpanKind.LLM, Span.cost_usd.is_(None),
+    ).scalar() or 0
     return {
         "by_day": by_day,
         "by_model": by_model,

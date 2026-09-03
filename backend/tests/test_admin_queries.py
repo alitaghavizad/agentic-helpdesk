@@ -238,7 +238,14 @@ def test_by_model_reports_unpriced_calls_separately_from_the_coalesced_zero(db_s
     assert by_model["unpriced-model"]["unpriced_calls"] == 2
 
 
-def test_totals_unpriced_calls_sums_across_every_model(db_session):
+def test_totals_unpriced_calls_counts_every_model_with_no_model_less_llm_spans_present(db_session):
+    """When every unpriced LLM span DOES carry a model, totals.unpriced_calls
+    and by_model's own per-row counts happen to agree -- but, per
+    test_totals_counts_an_errored_llm_call_with_no_model_as_unpriced below,
+    that agreement is not something totals is computed FROM any more (it
+    used to be: summing by_model's rows silently dropped a model-less LLM
+    span, which is exactly the case this feature exists to catch). This
+    pins the ordinary case; the test below pins the one that broke it."""
     from sqlalchemy import text
 
     db_session.execute(text("DELETE FROM spans"))
@@ -254,13 +261,46 @@ def test_totals_unpriced_calls_sums_across_every_model(db_session):
     db_session.flush()
 
     result = queries.costs(db_session)
-    # Pinned two ways: against the raw count, and against by_model's own
-    # per-row counts -- the totals field must not drift from the rows it is
-    # supposed to summarise.
     assert result["totals"]["unpriced_calls"] == 2
     assert result["totals"]["unpriced_calls"] == sum(
         row["unpriced_calls"] for row in result["by_model"]
     )
+
+
+def test_totals_counts_an_errored_llm_call_with_no_model_as_unpriced(db_session):
+    """app/agent/loop.py opens `span(SpanKind.LLM, ...)` BEFORE calling the
+    model (loop.py:96-108); if that call raises, `recorder.record_usage(...)`
+    -- which is what sets both `model` and `cost_usd` -- never runs, and the
+    span persists as kind=LLM, model=NULL, cost_usd=NULL. That is a real LLM
+    call whose cost is genuinely unknown: exactly what unpriced_calls exists
+    to surface.
+
+    by_model's own grouping filters `Span.model.isnot(None)` and so cannot
+    see this span at all -- it has no model to group by. Computing
+    totals.unpriced_calls by summing by_model's rows (the earlier
+    implementation) therefore silently dropped this exact case; the
+    assertion below on `by_model` is what proves the gap, not just the
+    total. totals.unpriced_calls must come from its own query, keyed on
+    `kind == LLM`, never on `model`."""
+    from sqlalchemy import text
+
+    db_session.execute(text("DELETE FROM spans"))
+    db_session.execute(text("DELETE FROM runs"))
+    run = Run(trigger=RunTrigger.CHAT_TURN, status=RunStatus.ERROR, started_at=datetime.now(timezone.utc))
+    db_session.add(run)
+    db_session.flush()
+    db_session.add(Span(
+        run_id=run.id, sequence=0, kind=SpanKind.LLM, name="beta.messages.stream",
+        status=SpanStatus.ERROR, model=None, cost_usd=None,
+    ))
+    db_session.flush()
+
+    result = queries.costs(db_session)
+    assert result["totals"]["unpriced_calls"] == 1
+    # The gap this test exists to catch: by_model cannot see this span at
+    # all (it has no model to group by), so summing its rows would report 0
+    # here while the true count is 1.
+    assert sum(row["unpriced_calls"] for row in result["by_model"]) == 0
 
 
 def test_a_span_with_no_model_is_not_counted_as_an_unpriced_call(db_session):
