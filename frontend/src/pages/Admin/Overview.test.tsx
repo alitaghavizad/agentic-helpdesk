@@ -134,6 +134,40 @@ describe("Overview", () => {
     expect(screen.getByText("ok")).toBeInTheDocument();
   });
 
+  it("polls the overview counters every 30 seconds", async () => {
+    vi.useFakeTimers();
+    try {
+      let overviewFetches = 0;
+      fetchMock.mockImplementation(async (url: string) => {
+        const u = String(url);
+        if (u.endsWith("/api/admin/overview")) {
+          overviewFetches += 1;
+          return jsonResponse(OVERVIEW_BODY);
+        }
+        if (u.endsWith("/api/admin/runs/stream")) return openStreamResponse().response;
+        throw new Error(`unexpected call: ${u}`);
+      });
+
+      render(<Overview />, { wrapper });
+      await act(async () => {
+        for (let i = 0; i < 15; i++) await Promise.resolve();
+      });
+      expect(overviewFetches).toBe(1);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+      expect(overviewFetches).toBe(2);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+      expect(overviewFetches).toBe(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("refetches the overview counters after the run stream disconnects", async () => {
     let overviewFetches = 0;
     let streamController!: ReadableStreamDefaultController<Uint8Array>;

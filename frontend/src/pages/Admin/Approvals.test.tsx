@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
@@ -69,6 +69,26 @@ const DECIDED_DENIED = {
   decision_note: "Not an authorized disclosure.",
   execution_result: null,
 };
+
+const DECIDED_FAILED = {
+  id: "a5",
+  request_number: "REQ-0902",
+  action_type: "send_email",
+  action_payload: { to: "broken@example.com" },
+  justification: "Customer asked for a status update by email.",
+  risk_level: "medium",
+  agent_summary: "Agent wants to email the customer.",
+  conversation_id: "c5",
+  status: "failed",
+  decision_note: "Approved.",
+  execution_result: { error: "SMTP connection refused" },
+};
+
+async function flushMicrotasks(times = 15) {
+  await act(async () => {
+    for (let i = 0; i < times; i++) await Promise.resolve();
+  });
+}
 
 function renderApprovals() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -218,6 +238,116 @@ describe("Approvals", () => {
     await vi.waitFor(() => {
       expect(decideCallCount).toBe(1);
     });
+  });
+
+  it("keeps a just-approved row visible in the pending view, showing its execution_result inline", async () => {
+    // The brief: an admin needs to see what actually happened right after
+    // they approved, including a failure -- not after switching to a
+    // separate "Decided" filter. This stays on the *pending* view the
+    // whole time.
+    const user = userEvent.setup();
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const u = String(url);
+      if (u.endsWith("/api/admin/approvals?status=pending")) return jsonResponse([PENDING_EMAIL]);
+      if (u.endsWith("/api/admin/approvals/a1/decide") && init?.method === "POST") {
+        return jsonResponse({
+          ...PENDING_EMAIL,
+          status: "executed",
+          decision_note: "go ahead",
+          execution_result: { sent: true, message_id: "m-1" },
+        });
+      }
+      throw new Error(`unexpected call: ${u}`);
+    });
+
+    renderApprovals();
+    await user.click(await screen.findByRole("button", { name: "Approve" }));
+    await user.click(screen.getByRole("button", { name: "Confirm approve" }));
+
+    // Still on the pending filter (never switched), the row is still
+    // there -- now showing its outcome instead of Approve/Deny controls.
+    expect(await screen.findByText("executed")).toBeInTheDocument();
+    expect(screen.getByText("REQ-1001")).toBeInTheDocument();
+    expect(screen.getByText(/"message_id"/)).toBeInTheDocument();
+    expect(screen.getByText(/m-1/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Filter by status")).toHaveValue("pending");
+  });
+
+  it("restores focus to the row's own card after a successful decide, not to <body>", async () => {
+    // The row's Approve button (the modal's opener) is gone by the time
+    // the modal closes -- the same successful decide that closes it also
+    // swaps the row's controls for its outcome. Modal.tsx's restore can't
+    // send focus back to a button that no longer exists, so ApprovalCard
+    // gives it a persistent fallback: the card's own container.
+    const user = userEvent.setup();
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const u = String(url);
+      if (u.endsWith("/api/admin/approvals?status=pending")) return jsonResponse([PENDING_EMAIL]);
+      if (u.endsWith("/api/admin/approvals/a1/decide") && init?.method === "POST") {
+        return jsonResponse({ ...PENDING_EMAIL, status: "executed", decision_note: "", execution_result: { sent: true } });
+      }
+      throw new Error(`unexpected call: ${u}`);
+    });
+
+    renderApprovals();
+    const card = (await screen.findByText("REQ-1001")).closest("div[tabindex]") as HTMLElement;
+    await user.click(screen.getByRole("button", { name: "Approve" }));
+    await user.click(screen.getByRole("button", { name: "Confirm approve" }));
+
+    await screen.findByText("executed");
+    console.log("ACTIVE:", document.activeElement?.outerHTML?.slice(0,120)); console.log("CARD:", card?.outerHTML?.slice(0,120)); expect(card).toHaveFocus();
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it("keeps a decided item visible with a failed execution_result, not just an executed one", async () => {
+    const user = userEvent.setup();
+    fetchMock.mockImplementation(async (url: string) => {
+      const u = String(url);
+      if (u.endsWith("/api/admin/approvals?status=pending")) return jsonResponse([]);
+      if (u.endsWith("/api/admin/approvals")) return jsonResponse([DECIDED_FAILED]);
+      throw new Error(`unexpected call: ${u}`);
+    });
+
+    renderApprovals();
+    await user.selectOptions(screen.getByLabelText("Filter by status"), "decided");
+
+    expect(await screen.findByText("REQ-0902")).toBeInTheDocument();
+    expect(screen.getByText("failed")).toBeInTheDocument();
+    // The failure detail itself, not merely a "failed" label -- this is
+    // the case the brief says an admin most needs to see.
+    expect(screen.getByText(/SMTP connection refused/)).toBeInTheDocument();
+  });
+
+  it("polls the approvals list every 30 seconds", async () => {
+    vi.useFakeTimers();
+    try {
+      let fetchCount = 0;
+      fetchMock.mockImplementation(async (url: string) => {
+        const u = String(url);
+        if (u.endsWith("/api/admin/approvals?status=pending")) {
+          fetchCount += 1;
+          return jsonResponse([PENDING_EMAIL]);
+        }
+        throw new Error(`unexpected call: ${u}`);
+      });
+
+      renderApprovals();
+      await flushMicrotasks();
+      expect(fetchCount).toBe(1);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+      expect(fetchCount).toBe(2);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+      expect(fetchCount).toBe(3);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("keeps a decided item visible with its execution_result", async () => {

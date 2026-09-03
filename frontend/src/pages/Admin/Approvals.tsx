@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import type { RefObject } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as admin from "../../api/endpoints/admin";
@@ -44,7 +45,7 @@ const STATUS_TONE: Record<string, BadgeTone> = {
  * a confirming click, not a single click on a list row.
  */
 function DecisionModal({
-  requestNumber, approve, submitting, error, onCancel, onConfirm,
+  requestNumber, approve, submitting, error, onCancel, onConfirm, restoreFocusFallback,
 }: {
   requestNumber: string;
   approve: boolean;
@@ -52,12 +53,13 @@ function DecisionModal({
   error: string | null;
   onCancel: () => void;
   onConfirm: (note: string) => void;
+  restoreFocusFallback: RefObject<HTMLElement | null>;
 }) {
   const [note, setNote] = useState("");
   const verb = approve ? "Approve" : "Deny";
 
   return (
-    <Modal title={`${verb} ${requestNumber}`} onClose={onCancel}>
+    <Modal title={`${verb} ${requestNumber}`} onClose={onCancel} restoreFocusFallback={restoreFocusFallback}>
       <label htmlFor="decision-note" className="mb-1 block text-xs font-medium text-slate-700">
         Note (optional)
       </label>
@@ -112,6 +114,16 @@ function ApprovalCard({ approval }: { approval: ApprovalResponse }) {
   const queryClient = useQueryClient();
   const [decisionOpen, setDecisionOpen] = useState<"approve" | "deny" | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // A stable, persistent fallback focus target for the decide modal's
+  // restore-on-close: a *successful* decide swaps this card's own
+  // Approve/Deny buttons for its outcome in the same render that closes
+  // the modal, so the button that opened it is gone from the document by
+  // the time the modal's cleanup runs. This card's own container div is
+  // not -- it is the one element in this row guaranteed to still be there
+  // afterward, so it is where the admin's focus lands instead of falling
+  // through to <body>. `tabIndex={-1}` makes it a valid programmatic
+  // target without adding it to the page's Tab order.
+  const cardRef = useRef<HTMLDivElement>(null);
 
   const decideMutation = useMutation({
     mutationFn: (input: { approve: boolean; note: string }) => admin.decideApproval(approval.id, input),
@@ -132,8 +144,30 @@ function ApprovalCard({ approval }: { approval: ApprovalResponse }) {
 
   const isPending = approval.status === "pending";
 
+  // Closes the second half of the decide-path focus story that Modal's own
+  // restore (see Modal.tsx) cannot reach on its own: a successful decide
+  // unmounts the modal in one render (where Modal's cleanup correctly
+  // restores focus to the still-connected Approve/Deny trigger it opened
+  // from) and THEN, in a separate, slightly later render -- once the query
+  // cache update from `onSuccess` below actually reaches this component's
+  // `approval` prop -- swaps those buttons out for the decided-info block.
+  // Removing the now-focused trigger in that second render is what
+  // actually kicks focus to `document.body` per the DOM's own focus
+  // handling (a focused node removed from the document is not "restored"
+  // anywhere by the browser). This effect catches exactly that: the
+  // pending -> decided transition landing focus on `<body>`, and moves it
+  // to this card instead, so the admin's focus ends up on the very outcome
+  // they just produced rather than nowhere.
+  const wasPending = useRef(isPending);
+  useEffect(() => {
+    if (wasPending.current && !isPending && document.activeElement === document.body) {
+      cardRef.current?.focus();
+    }
+    wasPending.current = isPending;
+  }, [isPending]);
+
   return (
-    <div className="space-y-3 rounded border border-slate-200 bg-white p-4">
+    <div ref={cardRef} tabIndex={-1} className="space-y-3 rounded border border-slate-200 bg-white p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex flex-wrap items-center gap-2">
           <span className="font-mono text-sm text-slate-500">{approval.request_number}</span>
@@ -208,6 +242,7 @@ function ApprovalCard({ approval }: { approval: ApprovalResponse }) {
           error={error}
           onCancel={() => setDecisionOpen(null)}
           onConfirm={(note) => decideMutation.mutate({ approve: decisionOpen === "approve", note })}
+          restoreFocusFallback={cardRef}
         />
       )}
     </div>
@@ -236,12 +271,23 @@ export function Approvals() {
   const listQuery = useQuery({
     queryKey: approvalsQueryKey(view),
     queryFn: () => admin.adminApprovals(view === "pending" ? "pending" : undefined),
+    // Design spec §6.3: 30s polling on the approvals queue. A pending
+    // request an admin has not yet acted on can be decided by someone
+    // else, or expire, without this tab doing anything to notice.
+    refetchInterval: 30_000,
   });
 
   const rows = listQuery.data ?? [];
-  const displayed = view === "pending"
-    ? rows.filter((row) => row.status === "pending")
-    : rows.filter((row) => row.status !== "pending");
+  // The pending view is NOT re-filtered to `status === "pending"` here.
+  // `ApprovalCard`'s decide mutation patches this same cached array in
+  // place (see its onSuccess below) rather than removing the row, so a
+  // just-decided item -- including a `failed` one -- stays on screen with
+  // its `execution_result` until the next refetch (the 30s interval above,
+  // or a manual filter switch) replaces the array with the server's fresh
+  // pending-only list. Filtering here would hide that outcome immediately,
+  // forcing the admin to switch to "Decided" to see what their own click
+  // just did -- exactly what the brief requires this screen not do.
+  const displayed = view === "pending" ? rows : rows.filter((row) => row.status !== "pending");
 
   return (
     <div className="space-y-4">

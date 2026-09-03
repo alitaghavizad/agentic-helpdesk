@@ -1,5 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { Modal } from "./Modal";
 
@@ -83,6 +84,65 @@ describe("Modal", () => {
 
     expect(opener).toHaveFocus();
     document.body.removeChild(opener);
+  });
+
+  it("does not re-capture the wrong focus target when its onClose prop changes identity while it stays open", async () => {
+    // Reproduces the Approvals decide-flow bug directly, isolated from
+    // Approvals.tsx: clicking Confirm there flips `decideMutation.isPending`
+    // to true, re-rendering the row -- which hands this Modal a brand new
+    // `onClose` closure (every caller writes `onClose={() => ...}` inline)
+    // while the dialog stays open, AND disables the row's own opener
+    // button in that same render. With `[onClose]` in the effect's deps,
+    // that re-render tore the effect down and re-ran it: cleanup tried to
+    // refocus the (now-disabled) opener, which silently failed, so the new
+    // setup re-captured `previouslyFocused` as whatever was ACTUALLY
+    // focused at that moment instead -- a stand-in "Distractor" button
+    // here, the Confirm button itself in the real flow. On the dialog's
+    // real close, THAT wrong element -- not the true original opener --
+    // is what regained focus.
+    function ReRenderHarness() {
+      const [open, setOpen] = useState(false);
+      const [openerDisabled, setOpenerDisabled] = useState(false);
+      return (
+        <div>
+          <button type="button" disabled={openerDisabled} onClick={() => setOpen(true)}>
+            Opener
+          </button>
+          <button type="button" onClick={() => setOpenerDisabled(true)}>
+            Distractor
+          </button>
+          {open && (
+            <Modal title="Test dialog" onClose={() => setOpen(false)}>
+              <button type="button" onClick={() => setOpen(false)}>
+                Confirm
+              </button>
+            </Modal>
+          )}
+        </div>
+      );
+    }
+
+    const user = userEvent.setup();
+    render(<ReRenderHarness />);
+
+    await user.click(screen.getByRole("button", { name: "Opener" }));
+    await screen.findByRole("dialog");
+
+    // Simulates the mid-decision re-render: something else (Approvals'
+    // `decideMutation.isPending` flipping true) disables the opener AND
+    // hands Modal a fresh `onClose` identity, all in the same render,
+    // while the dialog is still open.
+    await user.click(screen.getByRole("button", { name: "Distractor" }));
+    expect(screen.getByRole("button", { name: "Opener" })).toBeDisabled();
+
+    await user.click(screen.getByRole("button", { name: "Confirm" }));
+
+    // The true original opener -- not the "Distractor" that only happened
+    // to be focused at the moment of the corrupting re-render -- is what
+    // this dialog opened from, and is where focus belongs (even though it
+    // is now disabled and so cannot actually receive it back -- what
+    // matters here is that the WRONG element, Distractor, does not).
+    expect(screen.getByRole("button", { name: "Distractor" })).not.toHaveFocus();
   });
 
   it("still closes on Escape", async () => {

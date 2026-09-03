@@ -1,10 +1,22 @@
 import { useEffect, useRef } from "react";
-import type { ReactNode } from "react";
+import type { ReactNode, RefObject } from "react";
 
 interface ModalProps {
   title: string;
   onClose: () => void;
   children: ReactNode;
+  /**
+   * Where to send focus on close if the element that had it before this
+   * dialog opened is no longer in the document by then. This happens
+   * whenever the opener's own render swaps away on the same state change
+   * that closes the dialog -- Approvals' decide flow is the case this was
+   * added for: a successful decide both closes the modal and replaces the
+   * row's Approve/Deny buttons with its outcome, in the same commit, so
+   * the button that opened the dialog is gone by the time this runs.
+   * Optional -- omitting it just means focus falls through to
+   * `document.body`, same as before this existed.
+   */
+  restoreFocusFallback?: RefObject<HTMLElement | null>;
 }
 
 const FOCUSABLE_SELECTOR =
@@ -38,9 +50,28 @@ const FOCUSABLE_SELECTOR =
  * That is enough for every modal in this app -- Tickets' Resolve/Reassign,
  * Approvals' decide -- and Radix remains the answer, per D5, if a future
  * modal needs more than this.
+ *
+ * The setup/teardown effect below deliberately has an EMPTY dependency
+ * array, not `[onClose]`. Every caller passes a fresh arrow function on
+ * every render (`onClose={() => setOpen(false)}`), so depending on
+ * `onClose` made this effect tear down and re-run on every re-render of
+ * the *caller* while the dialog stayed open -- not just once per open/
+ * close. On Approvals' decide flow specifically, clicking Confirm flips
+ * `decideMutation.isPending`, which re-renders the row and hands this
+ * Modal a new `onClose` identity while the dialog is still up; the old
+ * effect's cleanup then ran mid-decision and re-captured
+ * `previouslyFocused` as whatever had focus *at that moment* (the
+ * Confirm button itself) instead of the row's original Approve/Deny
+ * trigger. A `ref` holds the latest `onClose` for the Escape handler and
+ * the backdrop's `onClick` to call, so the effect itself only needs to
+ * run once per mount and once per unmount, matching how every call site
+ * actually uses this component (conditionally rendered, not reused across
+ * a changing `onClose` while staying mounted).
  */
-export function Modal({ title, onClose, children }: ModalProps) {
+export function Modal({ title, onClose, children, restoreFocusFallback }: ModalProps) {
   const panelRef = useRef<HTMLDivElement>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
   useEffect(() => {
     const previouslyFocused = document.activeElement as HTMLElement | null;
@@ -58,7 +89,7 @@ export function Modal({ title, onClose, children }: ModalProps) {
 
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
-        onClose();
+        onCloseRef.current();
         return;
       }
       if (event.key !== "Tab" || !panel) return;
@@ -86,9 +117,24 @@ export function Modal({ title, onClose, children }: ModalProps) {
     document.addEventListener("keydown", handleKeyDown);
     return () => {
       document.removeEventListener("keydown", handleKeyDown);
-      previouslyFocused?.focus?.();
+      // The common case: the opener is still connected, so focus goes back
+      // to it. If a caller has already removed it by the time this runs
+      // (rare -- most callers unmount this dialog well before touching
+      // their own trigger), fall back to whatever was designated instead
+      // of leaving focus to default to `document.body`. This does NOT
+      // cover Approvals' decide case fully by itself -- see
+      // `ApprovalCard`'s own effect in Approvals.tsx for why a second,
+      // later render can still steal focus back to `<body>` even after
+      // this succeeds, and how that is actually closed.
+      if (previouslyFocused?.isConnected) {
+        previouslyFocused.focus();
+      } else {
+        restoreFocusFallback?.current?.focus();
+      }
     };
-  }, [onClose]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- see the
+    // comment above the component: intentionally once per mount/unmount.
+  }, []);
 
   return (
     <div

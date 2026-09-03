@@ -29,7 +29,11 @@ function Counter({ label, value }: { label: string; value: string }) {
  */
 export function Overview() {
   const queryClient = useQueryClient();
-  const query = useQuery({ queryKey: OVERVIEW_QUERY_KEY, queryFn: admin.adminOverview });
+  // Design spec §6.3: 30s polling on the overview counters, on top of the
+  // disconnect-triggered refetch below -- the stream only tells this
+  // screen when a run finished, never when a ticket opened, a lesson
+  // changed the pending-approvals count some other way, etc.
+  const query = useQuery({ queryKey: OVERVIEW_QUERY_KEY, queryFn: admin.adminOverview, refetchInterval: 30_000 });
   const { events, connected } = useRunStream();
 
   // The backend drops a subscriber that falls too far behind and closes the
