@@ -79,6 +79,30 @@ def test_list_tickets_rejects_an_unknown_status(client, db_session):
     assert client.get("/api/tickets?status=nonsense", headers=headers).status_code == 422
 
 
+def test_list_tickets_includes_the_routing_decision_on_each_item(client, db_session, make_ticket):
+    """Phase 8b task 10 review: the admin ticket board renders
+    matched_specialization/assignment_rationale/assignment_score straight off
+    GET /api/tickets, with no per-ticket detail fetch -- so TicketSummary
+    (not just TicketDetail) must carry these three fields, with the real
+    values off the ticket row, not merely present-but-empty placeholders.
+    Regression coverage for that widening: nothing else in this suite
+    exercises the list endpoint's routing-decision fields, so a change that
+    dropped them from TicketSummary/serialize_summary would otherwise pass
+    the whole backend suite silently."""
+    user, headers = _login(client, db_session, username="ticketrouting", role=Role.EMPLOYEE)
+    make_ticket(requester_user_id=user.id, title="Routed ticket")
+
+    resp = client.get("/api/tickets", headers=headers)
+
+    assert resp.status_code == 200
+    item = resp.json()[0]
+    # make_ticket's own defaults (tests/conftest.py) -- asserted against the
+    # actual seeded values, not just key presence.
+    assert item["matched_specialization"] == "Network and VPN Support"
+    assert item["assignment_rationale"] == "seeded by make_ticket"
+    assert item["assignment_score"] == 0.9
+
+
 def test_get_ticket_returns_the_full_detail(client, db_session, make_ticket):
     user, headers = _login(client, db_session, username="ticketdetail", role=Role.EMPLOYEE)
     ticket = make_ticket(requester_user_id=user.id, title="Detail me")
