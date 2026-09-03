@@ -177,7 +177,7 @@ describe("Conversations", () => {
   it("renders each conversation's title, participant, status, and created date", async () => {
     fetchMock.mockImplementation(async (url: string) => {
       const u = String(url);
-      if (u.endsWith("/api/admin/conversations?limit=50")) return jsonResponse(CONVERSATIONS_PAGE);
+      if (u.endsWith("/api/admin/conversations?limit=50&offset=0")) return jsonResponse(CONVERSATIONS_PAGE);
       throw new Error(`unexpected call: ${u}`);
     });
 
@@ -202,7 +202,7 @@ describe("Conversations", () => {
     // where neither name is available (an unjoinable user_id).
     fetchMock.mockImplementation(async (url: string) => {
       const u = String(url);
-      if (u.endsWith("/api/admin/conversations?limit=50")) {
+      if (u.endsWith("/api/admin/conversations?limit=50&offset=0")) {
         return jsonResponse({
           items: [
             CONVO_USER,
@@ -248,7 +248,7 @@ describe("Conversations", () => {
     const user = userEvent.setup();
     fetchMock.mockImplementation(async (url: string) => {
       const u = String(url);
-      if (u.endsWith("/api/admin/conversations?limit=50")) return jsonResponse(CONVERSATIONS_PAGE);
+      if (u.endsWith("/api/admin/conversations?limit=50&offset=0")) return jsonResponse(CONVERSATIONS_PAGE);
       if (u.includes("/api/admin/conversations?q=")) return jsonResponse({ items: [CONVO_GUEST], limit: 50, offset: 0, total: 1 });
       if (u.endsWith("/api/admin/conversations/c1")) return jsonResponse(CONVO_USER_DETAIL_TWO_RUNS);
       throw new Error(`unexpected call: ${u}`);
@@ -270,7 +270,7 @@ describe("Conversations", () => {
     const user = userEvent.setup();
     fetchMock.mockImplementation(async (url: string) => {
       const u = String(url);
-      if (u.endsWith("/api/admin/conversations?limit=50")) return jsonResponse(CONVERSATIONS_PAGE);
+      if (u.endsWith("/api/admin/conversations?limit=50&offset=0")) return jsonResponse(CONVERSATIONS_PAGE);
       if (u.endsWith("/api/admin/conversations/c1")) return jsonResponse(CONVO_USER_DETAIL_TWO_RUNS);
       if (u.endsWith("/api/admin/runs/r1/trace")) return jsonResponse(TRACE_R1);
       throw new Error(`unexpected call: ${u}`);
@@ -296,7 +296,7 @@ describe("Conversations", () => {
     const user = userEvent.setup();
     fetchMock.mockImplementation(async (url: string) => {
       const u = String(url);
-      if (u.endsWith("/api/admin/conversations?limit=50")) return jsonResponse(CONVERSATIONS_PAGE);
+      if (u.endsWith("/api/admin/conversations?limit=50&offset=0")) return jsonResponse(CONVERSATIONS_PAGE);
       if (u.endsWith("/api/admin/conversations/c1")) return jsonResponse(CONVO_USER_DETAIL_TWO_RUNS);
       throw new Error(`unexpected call: ${u}`);
     });
@@ -317,7 +317,7 @@ describe("Conversations", () => {
     const user = userEvent.setup();
     fetchMock.mockImplementation(async (url: string) => {
       const u = String(url);
-      if (u.endsWith("/api/admin/conversations?limit=50")) return jsonResponse(CONVERSATIONS_PAGE);
+      if (u.endsWith("/api/admin/conversations?limit=50&offset=0")) return jsonResponse(CONVERSATIONS_PAGE);
       if (u.endsWith("/api/admin/conversations/c1")) return jsonResponse(CONVO_USER_DETAIL_TWO_RUNS);
       if (u.endsWith("/api/admin/runs/r1/trace")) return jsonResponse(TRACE_R1);
       throw new Error(`unexpected call: ${u}`);
@@ -341,7 +341,7 @@ describe("Conversations", () => {
     const user = userEvent.setup();
     fetchMock.mockImplementation(async (url: string) => {
       const u = String(url);
-      if (u.endsWith("/api/admin/conversations?limit=50")) return jsonResponse(CONVERSATIONS_PAGE);
+      if (u.endsWith("/api/admin/conversations?limit=50&offset=0")) return jsonResponse(CONVERSATIONS_PAGE);
       if (u.endsWith("/api/admin/conversations/c2")) return jsonResponse(CONVO_GUEST_DETAIL_NO_RUNS);
       throw new Error(`unexpected call: ${u}`);
     });
@@ -359,7 +359,7 @@ describe("Conversations", () => {
     const user = userEvent.setup();
     fetchMock.mockImplementation(async (url: string) => {
       const u = String(url);
-      if (u.endsWith("/api/admin/conversations?limit=50")) return jsonResponse(CONVERSATIONS_PAGE);
+      if (u.endsWith("/api/admin/conversations?limit=50&offset=0")) return jsonResponse(CONVERSATIONS_PAGE);
       if (u.endsWith("/api/admin/conversations/c1")) return jsonResponse(CONVO_USER_DETAIL_TWO_RUNS);
       if (u.endsWith("/api/admin/runs/r1/trace")) return jsonResponse(TRACE_R1_TRUNCATED);
       throw new Error(`unexpected call: ${u}`);
@@ -375,7 +375,7 @@ describe("Conversations", () => {
   it("renders a failed conversations fetch as StateBlock's error state, never as an empty table", async () => {
     fetchMock.mockImplementation(async (url: string) => {
       const u = String(url);
-      if (u.endsWith("/api/admin/conversations?limit=50")) {
+      if (u.endsWith("/api/admin/conversations?limit=50&offset=0")) {
         return jsonResponse({ detail: "Forbidden: admin role required" }, 403);
       }
       throw new Error(`unexpected call: ${u}`);
@@ -390,7 +390,7 @@ describe("Conversations", () => {
   it("renders an empty conversation list distinguishably from a failed one", async () => {
     fetchMock.mockImplementation(async (url: string) => {
       const u = String(url);
-      if (u.endsWith("/api/admin/conversations?limit=50")) {
+      if (u.endsWith("/api/admin/conversations?limit=50&offset=0")) {
         return jsonResponse({ items: [], limit: 50, offset: 0, total: 0 });
       }
       throw new Error(`unexpected call: ${u}`);
@@ -402,11 +402,68 @@ describe("Conversations", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
+  it("gives a run badge its run-status tone, distinct from the conversation-status tones on the same screen", async () => {
+    // Reviewer finding: this screen used to share one tone map between
+    // conversation status (active/closed) and run status
+    // (running/ok/error/aborted) -- only "error" happened to overlap, so an
+    // "ok" or "running" run rendered neutral grey here even though
+    // /admin/traces renders the identical run green/blue. A still-running
+    // run looked identical to a finished one.
+    const user = userEvent.setup();
+    const RUN_RUNNING = { ...RUN_1, id: "r3", status: "running" };
+    const detail = { conversation: CONVO_USER, messages: [MESSAGE_TEXT], runs: [RUN_RUNNING, RUN_1] };
+    fetchMock.mockImplementation(async (url: string) => {
+      const u = String(url);
+      if (u.endsWith("/api/admin/conversations?limit=50&offset=0")) return jsonResponse(CONVERSATIONS_PAGE);
+      if (u.endsWith("/api/admin/conversations/c1")) return jsonResponse(detail);
+      throw new Error(`unexpected call: ${u}`);
+    });
+
+    renderConversations();
+    await user.click(await screen.findByRole("button", { name: "Printer will not connect" }));
+
+    const runningBadge = (await screen.findByText("running")).closest("span") as HTMLElement;
+    expect(runningBadge).toHaveClass("bg-blue-100");
+
+    const okBadge = screen.getByText("ok").closest("span") as HTMLElement;
+    expect(okBadge).toHaveClass("bg-emerald-100");
+  });
+
+  it("paginates the conversations list using the server's total, limit and offset", async () => {
+    const user = userEvent.setup();
+    const page1Items = Array.from({ length: 50 }, (_, i) => ({ ...CONVO_GUEST, id: `p1-${i}`, title: `Convo ${i}` }));
+    const page2Items = Array.from({ length: 10 }, (_, i) => ({ ...CONVO_GUEST, id: `p2-${i}`, title: `Convo ${50 + i}` }));
+    const requested: string[] = [];
+    fetchMock.mockImplementation(async (url: string) => {
+      const u = String(url);
+      requested.push(u);
+      if (u.endsWith("/api/admin/conversations?limit=50&offset=0")) {
+        return jsonResponse({ items: page1Items, limit: 50, offset: 0, total: 60 });
+      }
+      if (u.endsWith("/api/admin/conversations?limit=50&offset=50")) {
+        return jsonResponse({ items: page2Items, limit: 50, offset: 50, total: 60 });
+      }
+      throw new Error(`unexpected call: ${u}`);
+    });
+
+    renderConversations();
+
+    expect(await screen.findByText("Convo 0")).toBeInTheDocument();
+    expect(screen.getByText("Showing 1–50 of 60")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Next page" }));
+
+    expect(await screen.findByText("Convo 50")).toBeInTheDocument();
+    expect(screen.queryByText("Convo 0")).not.toBeInTheDocument();
+    expect(screen.getByText("Showing 51–60 of 60")).toBeInTheDocument();
+    expect(requested).toContain("http://localhost:8000/api/admin/conversations?limit=50&offset=50");
+  });
+
   it("shows a loading state before the conversations response arrives", async () => {
     let resolveList!: (value: Response) => void;
     fetchMock.mockImplementation(async (url: string) => {
       const u = String(url);
-      if (u.endsWith("/api/admin/conversations?limit=50")) {
+      if (u.endsWith("/api/admin/conversations?limit=50&offset=0")) {
         return new Promise<Response>((resolve) => { resolveList = resolve; });
       }
       throw new Error(`unexpected call: ${u}`);

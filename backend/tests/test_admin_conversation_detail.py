@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timedelta, timezone
 
 from app.auth.security import hash_password
 from app.chat.service import append_message
@@ -25,9 +26,19 @@ def test_detail_returns_transcript_and_runs(client, db_session):
     db_session.add(conv)
     db_session.commit()
     append_message(db_session, conv.id, MessageRole.USER, [{"type": "text", "text": "printer"}])
-    # Two runs, so the ordering assertion below has something to order.
-    db_session.add(Run(conversation_id=conv.id, trigger=RunTrigger.CHAT_TURN, status=RunStatus.OK))
-    db_session.add(Run(conversation_id=conv.id, trigger=RunTrigger.CHAT_TURN, status=RunStatus.ERROR))
+    # Two runs with distinct started_at values, so the ordering assertion
+    # below can actually tell newest from oldest rather than merely counting.
+    now = datetime.now(timezone.utc)
+    older = Run(
+        conversation_id=conv.id, trigger=RunTrigger.CHAT_TURN, status=RunStatus.OK,
+        started_at=now - timedelta(minutes=5),
+    )
+    newer = Run(
+        conversation_id=conv.id, trigger=RunTrigger.CHAT_TURN, status=RunStatus.ERROR,
+        started_at=now,
+    )
+    db_session.add(older)
+    db_session.add(newer)
     db_session.commit()
 
     body = client.get(f"/api/admin/conversations/{conv.id}", headers=headers).json()
@@ -36,6 +47,8 @@ def test_detail_returns_transcript_and_runs(client, db_session):
     assert body["conversation"]["guest_email"] == "g@example.com"
     assert [m["content"] for m in body["messages"]] == [[{"type": "text", "text": "printer"}]]
     assert len(body["runs"]) == 2
+    # Design spec §4.2: runs come back newest first.
+    assert [r["id"] for r in body["runs"]] == [str(newer.id), str(older.id)]
 
 
 def test_detail_excludes_runs_from_other_conversations(client, db_session):

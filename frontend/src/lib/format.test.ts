@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { duration, score, tokens, usd } from "./format";
+import { dateTime, duration, score, tokens, usd } from "./format";
 
 describe("usd", () => {
   it("renders 'unpriced' for null, never a zero", () => {
@@ -33,6 +33,23 @@ describe("duration", () => {
     expect(duration(1500)).toBe("1.5s");
     expect(duration(95000)).toBe("1m 35s");
     expect(duration(null)).toBe("—");
+  });
+});
+
+describe("dateTime", () => {
+  it("renders a valid ISO string using the platform's locale formatting", () => {
+    const iso = "2026-09-01T10:00:00Z";
+    expect(dateTime(iso)).toBe(new Date(iso).toLocaleString());
+  });
+
+  it("renders a falsy or missing input as a dash", () => {
+    expect(dateTime(null)).toBe("—");
+    expect(dateTime(undefined)).toBe("—");
+    expect(dateTime("")).toBe("—");
+  });
+
+  it("renders an unparseable string as a dash rather than 'Invalid Date'", () => {
+    expect(dateTime("not-a-date")).toBe("—");
   });
 });
 

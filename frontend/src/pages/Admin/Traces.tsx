@@ -8,22 +8,15 @@ import { StateBlock, describeError } from "../../components/StateBlock";
 import { Table } from "../../components/Table";
 import type { Column } from "../../components/Table";
 import { Badge } from "../../components/Badge";
-import type { BadgeTone } from "../../components/Badge";
 import { SpanTree } from "../../components/SpanTree";
 import { dateTime, duration, tokens, usd } from "../../lib/format";
+import { RUN_STATUS_TONE } from "../../lib/runStatus";
 
 const RUNS_QUERY_KEY = ["admin", "runs"] as const;
 
 function traceQueryKey(runId: string) {
   return ["admin", "trace", runId] as const;
 }
-
-const STATUS_TONE: Record<string, BadgeTone> = {
-  ok: "success",
-  error: "danger",
-  aborted: "warning",
-  running: "info",
-};
 
 /**
  * `GET /api/admin/runs/stream` carries only what `finalize_run` publishes
@@ -78,6 +71,11 @@ export function Traces() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
+  // No Pager here, unlike Conversations/Users/Lessons/Audit -- this list is
+  // continuously topped up by useRunStream below rather than a fixed page
+  // an admin pages through, so a `limit` without an `offset` is the correct
+  // shape for a live feed, not an inconsistency to "fix" into matching the
+  // others.
   const runsQuery = useQuery({ queryKey: RUNS_QUERY_KEY, queryFn: () => admin.adminRuns({ limit: 50 }) });
   const { events, connected } = useRunStream();
 
@@ -127,7 +125,7 @@ export function Traces() {
       header: "Status",
       render: (row) => (
         <div>
-          <Badge tone={STATUS_TONE[row.status] ?? "neutral"}>{row.status}</Badge>
+          <Badge tone={RUN_STATUS_TONE[row.status] ?? "neutral"}>{row.status}</Badge>
           {/* A run that errored says why, right in the list -- an admin
               scanning for trouble should not have to open every row's
               trace just to learn there was a failure at all. */}
@@ -197,7 +195,7 @@ export function Traces() {
                 <div>
                   <dt className="uppercase tracking-wide text-slate-500">Status</dt>
                   <dd>
-                    <Badge tone={STATUS_TONE[traceQuery.data.run.status] ?? "neutral"}>{traceQuery.data.run.status}</Badge>
+                    <Badge tone={RUN_STATUS_TONE[traceQuery.data.run.status] ?? "neutral"}>{traceQuery.data.run.status}</Badge>
                   </dd>
                 </div>
                 <div>

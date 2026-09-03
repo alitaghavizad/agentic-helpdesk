@@ -28,6 +28,7 @@ from app.admin.schemas import (
 )
 from app.approvals import service as approvals
 from app.audit.service import record_audit
+from app.chat.schemas import transcript_of
 from app.db.models import (
     ActorType, ApprovalStatus, Clearance, Lesson, LessonStatus, Role, User,
 )
@@ -358,8 +359,6 @@ def admin_conversation_detail(
     """Not audited, like every other admin read. The audit log records
     mutating calls (spec 14); a row per detail view would bury real events
     under navigation noise."""
-    from app.chat.schemas import transcript_of
-
     row = queries.get_conversation_with_participant(db, conversation_id)
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "no such conversation")

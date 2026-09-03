@@ -10,10 +10,12 @@ import type { Column } from "../../components/Table";
 import { Badge } from "../../components/Badge";
 import type { BadgeTone } from "../../components/Badge";
 import { SpanTree } from "../../components/SpanTree";
+import { Pager } from "../../components/Pager";
 import { dateTime, duration, tokens, usd } from "../../lib/format";
+import { RUN_STATUS_TONE } from "../../lib/runStatus";
 
-function conversationsQueryKey(q: string) {
-  return ["admin", "conversations", q] as const;
+function conversationsQueryKey(q: string, offset: number) {
+  return ["admin", "conversations", q, offset] as const;
 }
 
 function conversationDetailKey(id: string) {
@@ -24,12 +26,17 @@ function traceQueryKey(runId: string) {
   return ["admin", "conversation-trace", runId] as const;
 }
 
-const STATUS_TONE: Record<string, BadgeTone> = {
-  open: "info",
+// `ConversationStatus` (backend/app/db/models.py) only ever carries
+// `active`/`closed` -- `open` and `resolved` are dead keys here (they
+// belong to ticket status, not conversation status). Run status is a
+// wholly different enum (`RunStatus`: running/ok/error/aborted) and lives
+// in the shared `RUN_STATUS_TONE` map instead; the two used to be
+// conflated in one map, which happened to share the `error` key but
+// rendered a running/ok run as neutral grey -- indistinguishable from a
+// finished one.
+const CONVERSATION_STATUS_TONE: Record<string, BadgeTone> = {
   active: "info",
   closed: "neutral",
-  resolved: "success",
-  error: "danger",
 };
 
 /**
@@ -123,7 +130,7 @@ function RunRow({ run, selected, onSelect }: { run: RunSummary; selected: boolea
     >
       <div className="flex items-center justify-between gap-2">
         <span className="font-mono text-slate-800">{run.id}</span>
-        <Badge tone={STATUS_TONE[run.status] ?? "neutral"}>{run.status}</Badge>
+        <Badge tone={RUN_STATUS_TONE[run.status] ?? "neutral"}>{run.status}</Badge>
       </div>
       <div className="mt-1 flex items-center gap-2 text-slate-500">
         <span>{run.trigger}</span>
@@ -161,12 +168,13 @@ function ConversationRow({
  */
 export function Conversations() {
   const [q, setQ] = useState("");
+  const [offset, setOffset] = useState(0);
   const [selectedId, setSelectedId] = useState<string | undefined>(undefined);
   const [selectedRunId, setSelectedRunId] = useState<string | undefined>(undefined);
 
   const listQuery = useQuery({
-    queryKey: conversationsQueryKey(q),
-    queryFn: () => admin.adminConversations({ q: q || undefined, limit: 50 }),
+    queryKey: conversationsQueryKey(q, offset),
+    queryFn: () => admin.adminConversations({ q: q || undefined, limit: 50, offset }),
   });
 
   const detailQuery = useQuery({
@@ -197,6 +205,10 @@ export function Conversations() {
     // above it, with no way to tell it is now orphaned from the filter.
     setSelectedId(undefined);
     setSelectedRunId(undefined);
+    // A new search term also invalidates whatever page of results the old
+    // term was showing -- staying on, say, offset=50 could land on a page
+    // past the end of the new, usually much smaller, result set.
+    setOffset(0);
   }
 
   const columns: Column<ConversationSummary>[] = [
@@ -206,11 +218,12 @@ export function Conversations() {
       render: (row) => <ConversationRow conversation={row} selected={row.id === selectedId} onSelect={selectConversation} />,
     },
     { key: "participant", header: "Participant", render: (row) => participantLabel(row) },
-    { key: "status", header: "Status", render: (row) => <Badge tone={STATUS_TONE[row.status] ?? "neutral"}>{row.status}</Badge> },
+    { key: "status", header: "Status", render: (row) => <Badge tone={CONVERSATION_STATUS_TONE[row.status] ?? "neutral"}>{row.status}</Badge> },
     { key: "created", header: "Created", render: (row) => dateTime(row.created_at) },
   ];
 
-  const rows = listQuery.data?.items ?? [];
+  const page = listQuery.data;
+  const rows = page?.items ?? [];
 
   return (
     <div className="space-y-6">
@@ -233,7 +246,10 @@ export function Conversations() {
       ) : rows.length === 0 ? (
         <StateBlock status="empty" emptyLabel="No conversations recorded yet." />
       ) : (
-        <Table columns={columns} rows={rows} rowKey={(row) => row.id} />
+        <>
+          <Table columns={columns} rows={rows} rowKey={(row) => row.id} />
+          {page && <Pager total={page.total} limit={page.limit} offset={page.offset} onChange={setOffset} />}
+        </>
       )}
 
       {selectedId !== undefined && (

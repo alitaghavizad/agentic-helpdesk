@@ -82,9 +82,11 @@ A page that needs a URL string, or an endpoint module that imports React, means 
 
 ---
 
-## 4. Backend changes (task 0)
+## 4. Backend changes
 
-Four changes, each required by a screen this phase must build. All are additive; no existing response shape changes.
+Additive backend changes, each required by a screen this phase needed. The original four (below) came from Task 0; five more widenings were added by review as later screens exposed gaps — see §4.6.
+
+Additive only — no field is ever removed or renamed. Several existing response models are *widened* (gain new fields) rather than left untouched; see §4.6 for the full list.
 
 ### 4.1 `GET /api/conversations/{id}` returns its transcript
 
@@ -105,7 +107,7 @@ Admin-gated and audited on read? **No.** The audit log records mutating calls (p
 | `POST /api/admin/tickets/{id}/dossier` | `object` | `IncidentDossier` — the model already exists in `app/admin/dossier.py` and is already validated at build time |
 | `PATCH /api/admin/users/{id}` | `object` | `UserPatchResult {id, role, clearance}` |
 | `PATCH /api/admin/lessons/{id}` | `object` | `LessonSummary` |
-| `DELETE /api/admin/lessons/{id}` | `object` | `LessonDeleteResult {id, status}` |
+| `DELETE /api/admin/lessons/{id}` | `object` | `LessonDeleteResult {id, status, archived: bool}` |
 
 Declarations only. Each router still builds its payload field by field, per the rule already stated in `app/admin/schemas.py`: a column must not join the API by being added to a table.
 
@@ -118,6 +120,19 @@ Declarations only. Each router still builds its payload field by field, per the 
 - **No `conversation_id` filter on `GET /api/admin/runs`.** §4.2 already returns a conversation's runs; a second path to the same rows is a second thing to keep correct.
 - **No pagination on `GET /api/admin/approvals`.** The pending queue is bounded by how fast a human decides; the list endpoint already filters by status.
 - **No new SSE channels.** Approvals and tickets refresh by polling (§6.3).
+
+### 4.6 Widenings added after Task 0
+
+Each of these adds fields to an existing response; none removes or renames one. Every widening was forced by a specific screen this phase built, found during that screen's own review rather than anticipated in Task 0.
+
+| Model | Gained | Because |
+|---|---|---|
+| `PrincipalResponse` | `username`, `full_name` | The admin's own name was unreadable in the NavBar (rendered as a raw UUID). |
+| `NotificationResponse` | `created_at` | The bell's timestamp had no source field. |
+| `ConversationSummary` | `username`, `full_name` | The admin Conversations list rendered a registered participant as a raw UUID even though the search already matched on username. |
+| `CostByModel` | `unpriced_calls` | A wholly-unpriced model's spend was silently coalesced to `$0.00`, indistinguishable from genuinely-zero spend. |
+| `CostTotals` | `unpriced_calls` (counted via its own query, independent of `CostByModel`'s scope) | Same problem at the totals level. |
+| `TicketSummary` | `matched_specialization`, `assignment_rationale`, `assignment_score` | The admin ticket board needed the routing decision on every card and was firing one extra request per ticket to get it. |
 
 ---
 
