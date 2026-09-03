@@ -9,6 +9,7 @@ import { Overview } from "./pages/Admin/Overview";
 import { Costs } from "./pages/Admin/Costs";
 import { Traces } from "./pages/Admin/Traces";
 import { Conversations } from "./pages/Admin/Conversations";
+import { Approvals } from "./pages/Admin/Approvals";
 
 /** NavBar plus the routed page. Only signed-in routes get a shell. */
 function Shell() {
@@ -68,7 +69,7 @@ function App() {
         <Route path="conversations" element={<Conversations />} />
         <Route path="traces" element={<Traces />} />
         <Route path="traces/:runId" element={<Traces />} />
-        <Route path="approvals" element={<Placeholder title="Admin approvals" />} />
+        <Route path="approvals" element={<Approvals />} />
         <Route path="tickets" element={<Placeholder title="Admin tickets" />} />
         <Route path="users" element={<Placeholder title="Admin users" />} />
         <Route path="lessons" element={<Placeholder title="Admin lessons" />} />

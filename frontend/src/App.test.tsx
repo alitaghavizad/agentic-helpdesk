@@ -171,4 +171,31 @@ describe("App routing", () => {
     expect(await screen.findByRole("heading", { name: "Conversations" })).toBeInTheDocument();
     expect(screen.queryByText(/this screen is not built yet/i)).not.toBeInTheDocument();
   });
+
+  it("wires /admin/approvals to the real Approvals screen, not Task 2's placeholder", async () => {
+    vi.spyOn(ctx, "useAuth").mockReturnValue({
+      status: "signed-in", principal: ADMIN, login: vi.fn(), loginAsGuest: vi.fn(), logout: vi.fn(),
+    } as never);
+    fetchMock.mockImplementation(async (url: string) => {
+      const u = String(url);
+      if (u.endsWith("/api/admin/approvals?status=pending")) {
+        return jsonResponse([]);
+      }
+      if (u.includes("/stream")) {
+        return new Response(new ReadableStream(), { headers: { "content-type": "text/event-stream" } });
+      }
+      return jsonResponse([]);
+    });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter initialEntries={["/admin/approvals"]}>
+          <App />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByRole("heading", { name: "Approvals" })).toBeInTheDocument();
+    expect(screen.queryByText(/this screen is not built yet/i)).not.toBeInTheDocument();
+  });
 });
