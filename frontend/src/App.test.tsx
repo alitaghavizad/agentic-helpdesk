@@ -227,4 +227,84 @@ describe("App routing", () => {
     // filter dropdown rather than these per-status columns.
     expect(await screen.findByText("No tickets to show.")).toBeInTheDocument();
   });
+
+  it("wires /admin/users to the real Users screen, not Task 2's placeholder", async () => {
+    vi.spyOn(ctx, "useAuth").mockReturnValue({
+      status: "signed-in", principal: ADMIN, login: vi.fn(), loginAsGuest: vi.fn(), logout: vi.fn(),
+    } as never);
+    fetchMock.mockImplementation(async (url: string) => {
+      const u = String(url);
+      if (u.endsWith("/api/admin/users?offset=0")) return jsonResponse({ items: [], limit: 50, offset: 0, total: 0 });
+      if (u.includes("/stream")) {
+        return new Response(new ReadableStream(), { headers: { "content-type": "text/event-stream" } });
+      }
+      return jsonResponse([]);
+    });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter initialEntries={["/admin/users"]}>
+          <App />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByRole("heading", { name: "Users" })).toBeInTheDocument();
+    expect(screen.queryByText(/this screen is not built yet/i)).not.toBeInTheDocument();
+    expect(await screen.findByText("No user accounts.")).toBeInTheDocument();
+  });
+
+  it("wires /admin/lessons to the real Lessons screen, not Task 2's placeholder", async () => {
+    vi.spyOn(ctx, "useAuth").mockReturnValue({
+      status: "signed-in", principal: ADMIN, login: vi.fn(), loginAsGuest: vi.fn(), logout: vi.fn(),
+    } as never);
+    fetchMock.mockImplementation(async (url: string) => {
+      const u = String(url);
+      if (u.endsWith("/api/admin/lessons?offset=0")) return jsonResponse({ items: [], limit: 50, offset: 0, total: 0 });
+      if (u.includes("/stream")) {
+        return new Response(new ReadableStream(), { headers: { "content-type": "text/event-stream" } });
+      }
+      return jsonResponse([]);
+    });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter initialEntries={["/admin/lessons"]}>
+          <App />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByRole("heading", { name: "Lessons" })).toBeInTheDocument();
+    expect(screen.queryByText(/this screen is not built yet/i)).not.toBeInTheDocument();
+    expect(await screen.findByText("No lessons recorded yet.")).toBeInTheDocument();
+  });
+
+  it("wires /admin/audit to the real Audit screen, not Task 2's placeholder", async () => {
+    vi.spyOn(ctx, "useAuth").mockReturnValue({
+      status: "signed-in", principal: ADMIN, login: vi.fn(), loginAsGuest: vi.fn(), logout: vi.fn(),
+    } as never);
+    fetchMock.mockImplementation(async (url: string) => {
+      const u = String(url);
+      if (u.startsWith("http://localhost:8000/api/admin/audit")) {
+        return jsonResponse({ items: [], limit: 50, offset: 0, total: 0 });
+      }
+      if (u.includes("/stream")) {
+        return new Response(new ReadableStream(), { headers: { "content-type": "text/event-stream" } });
+      }
+      return jsonResponse([]);
+    });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter initialEntries={["/admin/audit"]}>
+          <App />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByRole("heading", { name: "Audit log" })).toBeInTheDocument();
+    expect(screen.queryByText(/this screen is not built yet/i)).not.toBeInTheDocument();
+    expect(await screen.findByText("No matching entries.")).toBeInTheDocument();
+  });
 });

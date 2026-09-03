@@ -11,6 +11,9 @@ import { Traces } from "./pages/Admin/Traces";
 import { Conversations } from "./pages/Admin/Conversations";
 import { Approvals } from "./pages/Admin/Approvals";
 import { Tickets as AdminTickets } from "./pages/Admin/Tickets";
+import { Users } from "./pages/Admin/Users";
+import { Lessons } from "./pages/Admin/Lessons";
+import { Audit } from "./pages/Admin/Audit";
 
 /** NavBar plus the routed page. Only signed-in routes get a shell. */
 function Shell() {
@@ -20,21 +23,6 @@ function Shell() {
       <main className="mx-auto max-w-6xl p-6">
         <Outlet />
       </main>
-    </div>
-  );
-}
-
-/**
- * A screen this task does not build yet -- tasks 3-5 replace these one
- * route at a time. Keeping the route wired now (rather than leaving it
- * missing) is what lets RequireRole and the nav links be exercised end to
- * end before the data screens exist.
- */
-function Placeholder({ title }: { title: string }) {
-  return (
-    <div className="rounded border border-dashed border-slate-300 p-8 text-center text-slate-500">
-      <p className="text-sm font-medium text-slate-700">{title}</p>
-      <p className="mt-1 text-sm">This screen is not built yet.</p>
     </div>
   );
 }
@@ -72,9 +60,9 @@ function App() {
         <Route path="traces/:runId" element={<Traces />} />
         <Route path="approvals" element={<Approvals />} />
         <Route path="tickets" element={<AdminTickets />} />
-        <Route path="users" element={<Placeholder title="Admin users" />} />
-        <Route path="lessons" element={<Placeholder title="Admin lessons" />} />
-        <Route path="audit" element={<Placeholder title="Admin audit" />} />
+        <Route path="users" element={<Users />} />
+        <Route path="lessons" element={<Lessons />} />
+        <Route path="audit" element={<Audit />} />
         <Route path="costs" element={<Costs />} />
         {/* path="/admin/*" matches and shadows the top-level "*" below for
             anything under /admin, so an unmatched child (e.g. /admin/typo)
