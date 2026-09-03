@@ -5,7 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "../auth/AuthContext";
 import { ApiError } from "../api/client";
 import * as tickets from "../api/endpoints/tickets";
-import type { EditableTicketStatus, TicketDetail, TicketStatus, TicketSummary } from "../api/endpoints/tickets";
+import type { EditableTicketStatus, TicketDetail, TicketPriority, TicketStatus, TicketSummary } from "../api/endpoints/tickets";
 import { Badge } from "../components/Badge";
 import type { BadgeTone } from "../components/Badge";
 import { Table } from "../components/Table";
@@ -36,6 +36,27 @@ const STATUS_FILTER_OPTIONS: TicketStatus[] = ["open", "assigned", "in_progress"
 // api/endpoints/tickets.ts's EditableTicketStatus) -- POST /resolve is the
 // only path there, routed through the Resolve modal below instead.
 const EDITABLE_STATUSES: EditableTicketStatus[] = ["open", "assigned", "in_progress", "closed", "escalated"];
+
+const PRIORITIES: TicketPriority[] = ["low", "medium", "high", "urgent"];
+
+export type DetailPhase = "loading" | "error" | "data";
+
+/**
+ * Resolves what the /tickets/:id view should render from the detail
+ * query's own flags. Exported as a pure function (rather than left inline
+ * in the JSX ternary) specifically so its trailing fallback can be pinned
+ * directly: a query that is not (yet) flagged loading or error, but also
+ * has no data yet -- a narrow but real gap between a route param changing
+ * and the new query's status settling -- must still resolve to "loading",
+ * never fall through to rendering nothing. A blank page is exactly what
+ * StateBlock exists to prevent.
+ */
+export function detailPhase(query: { isLoading: boolean; isError: boolean; data: unknown }): DetailPhase {
+  if (query.isLoading) return "loading";
+  if (query.isError) return "error";
+  if (query.data) return "data";
+  return "loading";
+}
 
 function ticketsQueryKey(status: string) {
   return ["tickets", status] as const;
@@ -95,16 +116,75 @@ function ResolveModal({
 }
 
 /**
- * Status dropdown + Resolve button for one ticket -- shared by both the list
- * table's per-row actions column and the single-ticket view.
+ * The Reassign modal's button enablement: backend/app/tickets/router.py's
+ * update_ticket returns 400 for a reassignment that arrives with no
+ * rationale text, so both fields must be non-empty before this can submit.
+ */
+function ReassignModal({
+  ticketNumber, currentAssignee, submitting, onCancel, onSubmit,
+}: {
+  ticketNumber: string;
+  currentAssignee: string;
+  submitting: boolean;
+  onCancel: () => void;
+  onSubmit: (assigneeRef: string, rationale: string) => void;
+}) {
+  const [assigneeRef, setAssigneeRef] = useState(currentAssignee);
+  const [rationale, setRationale] = useState("");
+  const canSubmit = assigneeRef.trim().length > 0 && rationale.trim().length > 0 && !submitting;
+
+  return (
+    <Modal title={`Reassign ${ticketNumber}`} onClose={onCancel}>
+      <label htmlFor="assignee-ref" className="mb-1 block text-xs font-medium text-slate-700">
+        Helpdesk specialist ref
+      </label>
+      <input
+        id="assignee-ref"
+        aria-label="Helpdesk specialist ref"
+        value={assigneeRef}
+        onChange={(event) => setAssigneeRef(event.target.value)}
+        className="mb-3 w-full rounded border border-slate-300 px-2 py-1 text-sm"
+      />
+      <label htmlFor="reassign-rationale" className="mb-1 block text-xs font-medium text-slate-700">
+        Rationale
+      </label>
+      <textarea
+        id="reassign-rationale"
+        aria-label="Reassignment rationale"
+        value={rationale}
+        onChange={(event) => setRationale(event.target.value)}
+        rows={3}
+        className="mb-3 w-full rounded border border-slate-300 px-2 py-1 text-sm"
+      />
+      <div className="flex justify-end gap-2">
+        <button type="button" onClick={onCancel} className="rounded px-3 py-1.5 text-sm text-slate-600">
+          Cancel
+        </button>
+        <button
+          type="button"
+          disabled={!canSubmit}
+          onClick={() => onSubmit(assigneeRef.trim(), rationale.trim())}
+          className="rounded bg-slate-900 px-3 py-1.5 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {submitting ? "Reassigning…" : "Reassign"}
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+/**
+ * Status/priority dropdowns plus Resolve and Reassign actions for one
+ * ticket -- shared by both the list table's per-row actions column and the
+ * single-ticket view.
  *
  * Rendered only for helpdesk/admin: the backend enforces the same gate on
  * PATCH and POST /resolve (spec 14), but showing these controls to an
  * employee or guest would be a lie about what they can actually do, since
  * every attempt would 403.
  *
- * Neither mutation applies an optimistic update -- the select's `value` is
- * bound straight to the query cache's current status, so a failed PATCH
+ * No mutation here applies an optimistic update -- every control's value is
+ * bound straight to the query cache's current data, so a failed PATCH
  * leaves the row showing exactly what it showed before the attempt, with
  * only an error message added.
  */
@@ -117,6 +197,7 @@ function TicketControls({
   const queryClient = useQueryClient();
   const [error, setError] = useState<string | null>(null);
   const [resolveOpen, setResolveOpen] = useState(false);
+  const [reassignOpen, setReassignOpen] = useState(false);
 
   function applyUpdated(updated: TicketDetail) {
     queryClient.setQueriesData<TicketSummary[]>({ queryKey: ["tickets"] }, (old) =>
@@ -138,6 +219,15 @@ function TicketControls({
     onError: (mutationError) => setError(errorDetail(mutationError)),
   });
 
+  const priorityMutation = useMutation({
+    mutationFn: (priority: TicketPriority) => tickets.updateTicket(ticket.id, { priority }),
+    onSuccess: (updated) => {
+      setError(null);
+      applyUpdated(updated);
+    },
+    onError: (mutationError) => setError(errorDetail(mutationError)),
+  });
+
   const resolveMutation = useMutation({
     mutationFn: (resolution: string) => tickets.resolveTicket(ticket.id, resolution),
     onSuccess: (updated) => {
@@ -148,29 +238,65 @@ function TicketControls({
     onError: (mutationError) => setError(errorDetail(mutationError)),
   });
 
+  const reassignMutation = useMutation({
+    mutationFn: ({ assigneeRef, rationale }: { assigneeRef: string; rationale: string }) =>
+      tickets.updateTicket(ticket.id, { assignee_helpdesk_ref: assigneeRef, reassignment_rationale: rationale }),
+    onSuccess: (updated) => {
+      setError(null);
+      applyUpdated(updated);
+      setReassignOpen(false);
+    },
+    // The backend can still 400 with both fields present -- an unknown
+    // helpdesk ref (router.py's "no such helpdesk specialist" check) -- so
+    // that detail must reach the user rather than be swallowed.
+    onError: (mutationError) => setError(errorDetail(mutationError)),
+  });
+
   if (!isStaff) return null;
 
   function handleStatusChange(event: ChangeEvent<HTMLSelectElement>) {
     statusMutation.mutate(event.target.value as EditableTicketStatus);
   }
 
+  function handlePriorityChange(event: ChangeEvent<HTMLSelectElement>) {
+    priorityMutation.mutate(event.target.value as TicketPriority);
+  }
+
   return (
     <div className="flex flex-col gap-1">
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
+        {ticket.status === "resolved" ? (
+          // A resolved ticket's status renders as plain text, never as a
+          // selectable option: PATCH must never be able to carry
+          // status: "resolved" (POST /resolve is the only path there), and
+          // a control that only ever displays its own current value while
+          // offering no other reachable option would just be theatre.
+          <span className="rounded border border-slate-200 px-2 py-1 text-xs text-slate-500">resolved</span>
+        ) : (
+          <select
+            aria-label={`Status for ${ticket.ticket_number}`}
+            value={ticket.status}
+            onChange={handleStatusChange}
+            disabled={statusMutation.isPending}
+            className="rounded border border-slate-300 px-2 py-1 text-xs"
+          >
+            {EDITABLE_STATUSES.map((status) => (
+              <option key={status} value={status}>
+                {status}
+              </option>
+            ))}
+          </select>
+        )}
         <select
-          aria-label={`Status for ${ticket.ticket_number}`}
-          value={ticket.status}
-          onChange={handleStatusChange}
-          disabled={statusMutation.isPending}
+          aria-label={`Priority for ${ticket.ticket_number}`}
+          value={ticket.priority}
+          onChange={handlePriorityChange}
+          disabled={priorityMutation.isPending}
           className="rounded border border-slate-300 px-2 py-1 text-xs"
         >
-          {/* Present only so a ticket that is ALREADY resolved renders its
-              real value instead of silently falling back to the first
-              option -- it is never one of the choices PATCH can send. */}
-          {ticket.status === "resolved" && <option value="resolved">resolved</option>}
-          {EDITABLE_STATUSES.map((status) => (
-            <option key={status} value={status}>
-              {status}
+          {PRIORITIES.map((priority) => (
+            <option key={priority} value={priority}>
+              {priority}
             </option>
           ))}
         </select>
@@ -180,6 +306,13 @@ function TicketControls({
           className="rounded border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
         >
           Resolve
+        </button>
+        <button
+          type="button"
+          onClick={() => setReassignOpen(true)}
+          className="rounded border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
+        >
+          Reassign
         </button>
       </div>
       {error && (
@@ -193,6 +326,15 @@ function TicketControls({
           submitting={resolveMutation.isPending}
           onCancel={() => setResolveOpen(false)}
           onSubmit={(resolution) => resolveMutation.mutate(resolution)}
+        />
+      )}
+      {reassignOpen && (
+        <ReassignModal
+          ticketNumber={ticket.ticket_number}
+          currentAssignee={ticket.assignee_helpdesk_ref}
+          submitting={reassignMutation.isPending}
+          onCancel={() => setReassignOpen(false)}
+          onSubmit={(assigneeRef, rationale) => reassignMutation.mutate({ assigneeRef, rationale })}
         />
       )}
     </div>
@@ -238,15 +380,12 @@ export function Tickets() {
   });
 
   if (id !== undefined) {
+    const phase = detailPhase(detailQuery);
     return (
       <div className="space-y-4">
-        {detailQuery.isLoading ? (
-          <StateBlock status="loading" />
-        ) : detailQuery.isError ? (
-          <StateBlock status="error" message={describeError(detailQuery.error)} />
-        ) : detailQuery.data ? (
-          <TicketDetailView ticket={detailQuery.data} isStaff={isStaff} />
-        ) : null}
+        {phase === "loading" && <StateBlock status="loading" />}
+        {phase === "error" && <StateBlock status="error" message={describeError(detailQuery.error)} />}
+        {phase === "data" && detailQuery.data && <TicketDetailView ticket={detailQuery.data} isStaff={isStaff} />}
       </div>
     );
   }

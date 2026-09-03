@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { Tickets } from "./Tickets";
+import { Tickets, detailPhase } from "./Tickets";
 import * as authCtx from "../auth/AuthContext";
 
 // fetch is stubbed directly, the same way Chat.test.tsx and
@@ -140,12 +140,17 @@ describe("Tickets", () => {
     await screen.findByText("TCK-000001");
 
     // The server would 403 an employee's PATCH/resolve regardless -- showing
-    // these controls anyway would be a lie about what the user can do.
+    // these controls anyway would be a lie about what the user can do. Spec
+    // 5's "/tickets" row promises staff "the edit controls and Resolve" --
+    // status, priority, resolve AND reassign are all "the edit controls",
+    // so an employee must see none of them, not just the status one.
     expect(screen.queryByLabelText(/status for tck-000001/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/priority for tck-000001/i)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /resolve/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /reassign/i })).not.toBeInTheDocument();
   });
 
-  it("shows a helpdesk user both a status control and a Resolve button", async () => {
+  it("shows a helpdesk user the full set of edit controls: status, priority, Resolve and Reassign", async () => {
     fetchMock.mockImplementation(async (url: string) => {
       if (String(url).endsWith("/api/tickets")) return jsonResponse([TICKET_1]);
       throw new Error(`unexpected call: ${url}`);
@@ -155,7 +160,9 @@ describe("Tickets", () => {
     await screen.findByText("TCK-000001");
 
     expect(screen.getByLabelText(/status for tck-000001/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/priority for tck-000001/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /resolve/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /reassign/i })).toBeInTheDocument();
   });
 
   it("disables the Resolve modal's submit button until resolution text is non-empty", async () => {
@@ -280,6 +287,152 @@ describe("Tickets", () => {
     expect(listFetches).toBe(1);
   });
 
+  it("applies a successful priority PATCH to the row via its own select", async () => {
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const u = String(url);
+      if (u.endsWith("/api/tickets/t1") && init?.method === "PATCH") {
+        expect(JSON.parse(init.body as string)).toEqual({ priority: "urgent" });
+        return jsonResponse(ticketDetail({ priority: "urgent" }));
+      }
+      if (u.endsWith("/api/tickets")) return jsonResponse([TICKET_1]);
+      throw new Error(`unexpected call: ${u} ${init?.method}`);
+    });
+
+    renderTickets(HELPDESK);
+    await screen.findByText("TCK-000001");
+
+    const select = screen.getByLabelText(/priority for tck-000001/i) as HTMLSelectElement;
+    expect(select.value).toBe("high");
+    await userEvent.selectOptions(select, "urgent");
+
+    await waitFor(() => expect(select.value).toBe("urgent"));
+    expect(screen.getByText("urgent", { selector: "span" })).toBeInTheDocument();
+  });
+
+  it("renders a failed priority PATCH's ApiError detail and leaves the priority unchanged", async () => {
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const u = String(url);
+      if (u.endsWith("/api/tickets")) return jsonResponse([TICKET_1]);
+      if (u.endsWith("/api/tickets/t1") && init?.method === "PATCH") {
+        return jsonResponse({ detail: "cannot change priority right now" }, 409);
+      }
+      throw new Error(`unexpected call: ${u} ${init?.method}`);
+    });
+
+    renderTickets(HELPDESK);
+    await screen.findByText("TCK-000001");
+
+    const select = screen.getByLabelText(/priority for tck-000001/i) as HTMLSelectElement;
+    await userEvent.selectOptions(select, "urgent");
+
+    expect(await screen.findByText("cannot change priority right now")).toBeInTheDocument();
+    expect(select.value).toBe("high");
+    expect(screen.getByText("high", { selector: "span" })).toBeInTheDocument();
+  });
+
+  it("renders an already-resolved ticket's status as plain text, never a selectable option", async () => {
+    // A resolved ticket must not offer a status <select> at all -- if it
+    // did, its only reachable value in a select bound to the CURRENT status
+    // would be "resolved" itself, which PATCH must never carry (POST
+    // /resolve is the only path there). Rendering plain text instead makes
+    // that structurally impossible rather than relying on nobody wiring up
+    // a way to reach it.
+    fetchMock.mockImplementation(async (url: string) => {
+      if (String(url).endsWith("/api/tickets")) return jsonResponse([{ ...TICKET_1, status: "resolved" }]);
+      throw new Error(`unexpected call: ${url}`);
+    });
+
+    renderTickets(HELPDESK);
+    await screen.findByText("TCK-000001");
+
+    expect(screen.queryByLabelText(/status for tck-000001/i)).not.toBeInTheDocument();
+    expect(screen.getAllByText("resolved").length).toBeGreaterThan(0);
+  });
+
+  it("disables the Reassign modal's submit button until both the assignee ref and rationale are filled", async () => {
+    fetchMock.mockImplementation(async (url: string) => {
+      if (String(url).endsWith("/api/tickets")) return jsonResponse([TICKET_1]);
+      throw new Error(`unexpected call: ${url}`);
+    });
+
+    renderTickets(HELPDESK);
+    await screen.findByText("TCK-000001");
+
+    await userEvent.click(screen.getByRole("button", { name: /reassign/i }));
+    const dialog = await screen.findByRole("dialog", { name: /reassign tck-000001/i });
+    const submit = within(dialog).getByRole("button", { name: /^reassign$/i });
+    // Pre-filled with the current assignee, but with no rationale yet --
+    // backend/app/tickets/router.py:127 400s a reassignment with an empty
+    // rationale, so the button must not let that request happen.
+    expect(submit).toBeDisabled();
+
+    await userEvent.type(within(dialog).getByLabelText(/rationale/i), "Escalating to a networking specialist.");
+    expect(submit).toBeEnabled();
+
+    await userEvent.clear(within(dialog).getByLabelText(/helpdesk specialist ref/i));
+    expect(submit).toBeDisabled();
+  });
+
+  it("submits a reassignment via PATCH with both assignee_helpdesk_ref and reassignment_rationale", async () => {
+    let patchCalls = 0;
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const u = String(url);
+      if (u.endsWith("/api/tickets")) return jsonResponse([TICKET_1]);
+      if (u.endsWith("/api/tickets/t1") && init?.method === "PATCH") {
+        patchCalls += 1;
+        expect(JSON.parse(init.body as string)).toEqual({
+          assignee_helpdesk_ref: "HD-2",
+          reassignment_rationale: "Escalating to a networking specialist.",
+        });
+        return jsonResponse(ticketDetail({ assignee_helpdesk_ref: "HD-2" }));
+      }
+      throw new Error(`unexpected call: ${u} ${init?.method}`);
+    });
+
+    renderTickets(HELPDESK);
+    await screen.findByText("TCK-000001");
+
+    await userEvent.click(screen.getByRole("button", { name: /reassign/i }));
+    const dialog = await screen.findByRole("dialog", { name: /reassign tck-000001/i });
+    await userEvent.clear(within(dialog).getByLabelText(/helpdesk specialist ref/i));
+    await userEvent.type(within(dialog).getByLabelText(/helpdesk specialist ref/i), "HD-2");
+    await userEvent.type(within(dialog).getByLabelText(/rationale/i), "Escalating to a networking specialist.");
+    await userEvent.click(within(dialog).getByRole("button", { name: /^reassign$/i }));
+
+    await waitFor(() => expect(patchCalls).toBe(1));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(await screen.findByText("HD-2")).toBeInTheDocument();
+  });
+
+  it("surfaces a rejected reassignment's ApiError detail instead of swallowing it", async () => {
+    // backend/app/tickets/router.py 400s with "no such helpdesk specialist:
+    // ..." for an unresolvable ref, even though both fields were supplied --
+    // this must reach the user, not be silently dropped.
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const u = String(url);
+      if (u.endsWith("/api/tickets")) return jsonResponse([TICKET_1]);
+      if (u.endsWith("/api/tickets/t1") && init?.method === "PATCH") {
+        return jsonResponse({ detail: "no such helpdesk specialist: 'HD-999'" }, 400);
+      }
+      throw new Error(`unexpected call: ${u} ${init?.method}`);
+    });
+
+    renderTickets(HELPDESK);
+    await screen.findByText("TCK-000001");
+
+    await userEvent.click(screen.getByRole("button", { name: /reassign/i }));
+    const dialog = await screen.findByRole("dialog", { name: /reassign tck-000001/i });
+    await userEvent.clear(within(dialog).getByLabelText(/helpdesk specialist ref/i));
+    await userEvent.type(within(dialog).getByLabelText(/helpdesk specialist ref/i), "HD-999");
+    await userEvent.type(within(dialog).getByLabelText(/rationale/i), "Trying an unknown ref.");
+    await userEvent.click(within(dialog).getByRole("button", { name: /^reassign$/i }));
+
+    expect(await screen.findByText("no such helpdesk specialist: 'HD-999'")).toBeInTheDocument();
+    // The assignee must not have visibly changed -- the row still reflects
+    // what the server actually has.
+    expect(screen.getByText("HD-1")).toBeInTheDocument();
+  });
+
   it("renders the single ticket at /tickets/:id via GET /api/tickets/{id}, without listing", async () => {
     fetchMock.mockImplementation(async (url: string) => {
       const u = String(url);
@@ -308,5 +461,28 @@ describe("Tickets", () => {
     renderTickets(EMPLOYEE, { route: "/tickets/t9" });
 
     expect(await screen.findByRole("alert")).toHaveTextContent("no such ticket");
+  });
+});
+
+describe("detailPhase", () => {
+  it("resolves to loading while the query is loading", () => {
+    expect(detailPhase({ isLoading: true, isError: false, data: undefined })).toBe("loading");
+  });
+
+  it("resolves to error when the query has errored", () => {
+    expect(detailPhase({ isLoading: false, isError: true, data: undefined })).toBe("error");
+  });
+
+  it("resolves to data once the query has data", () => {
+    expect(detailPhase({ isLoading: false, isError: false, data: { id: "t1" } })).toBe("data");
+  });
+
+  it("falls back to loading -- never a blank page -- when not flagged loading or error but data is still absent", () => {
+    // The narrow gap this exists for: e.g. a route param change landing
+    // between the old query's teardown and the new one's status settling.
+    // Nothing about the Tickets.tsx render path may fall through to
+    // rendering neither StateBlock nor TicketDetailView.
+    expect(detailPhase({ isLoading: false, isError: false, data: undefined })).toBe("loading");
+    expect(detailPhase({ isLoading: false, isError: false, data: null })).toBe("loading");
   });
 });
