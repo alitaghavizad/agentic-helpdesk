@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
@@ -338,5 +338,71 @@ describe("Traces", () => {
     renderTraces({ route: "/admin/traces/r1" });
 
     expect(await screen.findByText("answer")).toBeInTheDocument();
+  });
+
+  it("renders a failed trace fetch as StateBlock's error state, e.g. a deep link to an unknown or deleted run", async () => {
+    // A realistic path: Chat.tsx's "View trace" link (or a bookmarked URL)
+    // deep-links straight to /admin/traces/:runId, and the run behind that
+    // id can 404 -- deleted, or simply never existed. The list itself is
+    // healthy here; only the per-run trace fetch fails, and that failure
+    // must not be silently swallowed into an empty-looking waterfall.
+    fetchMock.mockImplementation(async (url: string) => {
+      const u = String(url);
+      if (u.endsWith("/api/admin/runs?limit=50")) return jsonResponse(RUNS_PAGE);
+      if (u.endsWith("/api/admin/runs/stream")) return openStreamResponse().response;
+      if (u.endsWith("/api/admin/runs/does-not-exist/trace")) {
+        return jsonResponse({ detail: "Run not found" }, 404);
+      }
+      throw new Error(`unexpected call: ${u}`);
+    });
+
+    renderTraces({ route: "/admin/traces/does-not-exist" });
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Run not found");
+    expect(screen.queryByRole("tree")).not.toBeInTheDocument();
+  });
+
+  it("refetches the runs list after the run stream disconnects", async () => {
+    // Mirrors Overview.test.tsx's identical proof for the same hook: the
+    // backend drops a subscriber that falls behind and closes the stream
+    // rather than queueing for it (app/admin/router.py), so there is no
+    // backlog to replay on reconnect -- Traces.tsx's own wasConnected
+    // effect is what re-reads the list rather than leaving it stale.
+    let runsFetches = 0;
+    let streamController!: ReadableStreamDefaultController<Uint8Array>;
+    fetchMock.mockImplementation(async (url: string) => {
+      const u = String(url);
+      if (u.endsWith("/api/admin/runs?limit=50")) {
+        runsFetches += 1;
+        return jsonResponse(runsFetches === 1 ? RUNS_PAGE : { items: [RUN_OK], limit: 50, offset: 0, total: 1 });
+      }
+      if (u.endsWith("/api/admin/runs/stream")) {
+        const opened = openStreamResponse();
+        streamController = opened.controller;
+        return opened.response;
+      }
+      throw new Error(`unexpected call: ${u}`);
+    });
+
+    renderTraces();
+
+    // Wait for the initial fetch and a live connection.
+    await screen.findByText("r1");
+    await screen.findByText("Live");
+
+    // Simulate the backend dropping this subscriber by ending the stream's
+    // body -- the disconnect alone, not a manual reload, must trigger a
+    // second read of the list.
+    await act(async () => {
+      streamController.close();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(runsFetches).toBe(2));
+    // The second page no longer has r2 -- proof the re-read (not a cached
+    // copy) is what is on screen.
+    await waitFor(() => expect(screen.queryByText("r2")).not.toBeInTheDocument());
   });
 });

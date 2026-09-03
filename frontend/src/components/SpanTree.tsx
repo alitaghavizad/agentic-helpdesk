@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { components } from "../api/schema";
 import { Badge } from "./Badge";
 import type { BadgeTone } from "./Badge";
+import { JsonBlock } from "./JsonBlock";
 import { duration, tokens, usd } from "../lib/format";
 
 export type SpanNode = components["schemas"]["SpanNode"];
@@ -13,23 +14,6 @@ const STATUS_TONE: Record<string, BadgeTone> = {
   running: "info",
   aborted: "neutral",
 };
-
-/**
- * A single input/output value from a span, already redacted server-side
- * (backend/app/tracing/redaction.py runs at persistence time, before this
- * ever reaches the wire). This block only formats what it is given -- it
- * must never claim, in its own label or behaviour, to be doing any
- * redacting of its own.
- */
-function JsonBlock({ label, value }: { label: string; value: unknown }) {
-  const text = value === null || value === undefined ? "null" : JSON.stringify(value, null, 2);
-  return (
-    <div className="mb-2 rounded border border-slate-200 bg-slate-50 p-2">
-      <p className="mb-1 text-xs font-medium uppercase tracking-wide text-slate-500">{label}</p>
-      <pre className="whitespace-pre-wrap break-words text-xs text-slate-700">{text}</pre>
-    </div>
-  );
-}
 
 interface SpanRowProps {
   node: SpanNode;
