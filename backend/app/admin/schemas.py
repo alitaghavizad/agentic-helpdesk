@@ -63,6 +63,16 @@ class ConversationSummary(BaseModel):
     user_id: str | None
     guest_name: str | None
     guest_email: str | None
+    # Populated from the `users` row the admin queries already outer-join
+    # for participant search (app/admin/queries.py's list_conversations) --
+    # NULL for a guest conversation, which has no `users` row at all. Added
+    # because rendering the raw `user_id` for a logged-in participant is
+    # the one thing standing between an admin's search term ("jamie") and
+    # ever seeing that name again in the result -- the same shape as
+    # PrincipalResponse's username/full_name in app/auth/router.py, and for
+    # the same reason.
+    username: str | None
+    full_name: str | None
     created_at: str | None
 
 

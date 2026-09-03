@@ -324,6 +324,21 @@ def admin_run_trace(run_id: uuid.UUID, principal: AdminPrincipal) -> dict:
     }
 
 
+def _conversation_summary_row(conv, username: str | None, full_name: str | None) -> dict:
+    """The `ConversationSummary` shape, shared by the list and the detail
+    endpoint below -- both read through `queries._conversations_with_participant`'s
+    identical join, and this is what turns that join's tuple into the
+    published schema, so the two endpoints cannot disagree about what a
+    conversation's participant looks like."""
+    return {
+        "id": str(conv.id), "title": conv.title, "status": conv.status.value,
+        "user_id": str(conv.user_id) if conv.user_id else None,
+        "guest_name": conv.guest_name, "guest_email": conv.guest_email,
+        "username": username, "full_name": full_name,
+        "created_at": conv.created_at.isoformat() if conv.created_at else None,
+    }
+
+
 @router.get("/conversations", response_model=PageResponse[ConversationSummary])
 def admin_conversations(
     principal: AdminPrincipal, db: DbSession, q: str | None = None,
@@ -331,12 +346,7 @@ def admin_conversations(
 ) -> PageResponse:
     page = queries.list_conversations(db, q=q, limit=limit, offset=offset)
     return PageResponse(
-        items=[{
-            "id": str(c.id), "title": c.title, "status": c.status.value,
-            "user_id": str(c.user_id) if c.user_id else None,
-            "guest_name": c.guest_name, "guest_email": c.guest_email,
-            "created_at": c.created_at.isoformat() if c.created_at else None,
-        } for c in page.items],
+        items=[_conversation_summary_row(conv, username, full_name) for conv, username, full_name in page.items],
         total=page.total, limit=page.limit, offset=page.offset,
     )
 
@@ -349,19 +359,14 @@ def admin_conversation_detail(
     mutating calls (spec 14); a row per detail view would bury real events
     under navigation noise."""
     from app.chat.schemas import transcript_of
-    from app.db.models import Conversation
 
-    conv = db.query(Conversation).filter(Conversation.id == conversation_id).one_or_none()
-    if conv is None:
+    row = queries.get_conversation_with_participant(db, conversation_id)
+    if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "no such conversation")
+    conv, username, full_name = row
 
     return ConversationDetail(
-        conversation=ConversationSummary(
-            id=str(conv.id), title=conv.title, status=conv.status.value,
-            user_id=str(conv.user_id) if conv.user_id else None,
-            guest_name=conv.guest_name, guest_email=conv.guest_email,
-            created_at=conv.created_at.isoformat() if conv.created_at else None,
-        ),
+        conversation=ConversationSummary(**_conversation_summary_row(conv, username, full_name)),
         messages=transcript_of(db, conversation_id),
         runs=[RunSummary(**_run_list_row(run)) for run in queries.conversation_runs(db, conversation_id)],
     )

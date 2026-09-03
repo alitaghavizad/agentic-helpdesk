@@ -804,6 +804,8 @@ export interface components {
         ConversationSummary: {
             /** Created At */
             created_at: string | null;
+            /** Full Name */
+            full_name: string | null;
             /** Guest Email */
             guest_email: string | null;
             /** Guest Name */
@@ -816,6 +818,8 @@ export interface components {
             title: string | null;
             /** User Id */
             user_id: string | null;
+            /** Username */
+            username: string | null;
         };
         /** CostByDay */
         CostByDay: {

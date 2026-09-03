@@ -244,6 +244,26 @@ def list_runs(db: Session, *, limit: int | None = None, offset: int | None = Non
     return Page(items=items, total=int(total), limit=limit, offset=offset)
 
 
+def _conversations_with_participant(db: Session):
+    """The base query both `list_conversations` and
+    `get_conversation_with_participant` build on: `Conversation` OUTER
+    JOINed to `User` on `user_id`, selecting the user's `username` and
+    `full_name` alongside each row.
+
+    OUTER, not INNER: a guest conversation has `user_id` NULL, and an inner
+    join would silently drop every guest conversation. `username`/
+    `full_name` come back NULL for those rows for the same reason -- there
+    is no `users` row to join to.
+
+    One function so the list and the single-conversation detail fetch
+    cannot describe a conversation's participant differently -- both read
+    through the exact same join instead of one of them drifting to a
+    second, slightly different query later."""
+    return db.query(Conversation, User.username, User.full_name).outerjoin(
+        User, Conversation.user_id == User.id,
+    )
+
+
 def list_conversations(
     db: Session, *, q: str | None = None, limit: int | None = None, offset: int | None = None,
 ) -> Page:
@@ -260,16 +280,18 @@ def list_conversations(
     full_name come from the joined `users` row; guest_email is searched too
     because it is the only identifier a guest conversation reliably has.
 
-    The join is an OUTER join: a guest conversation has user_id NULL, and an
-    inner join would silently drop every guest conversation from the
-    unfiltered list as well as from search results.
+    The join also answers the response, not only the filter: `items` is now
+    `(Conversation, username, full_name)` tuples, so a caller can show which
+    participant actually matched a search term instead of the search
+    matching on a name the response never surfaced (see
+    `_conversations_with_participant`).
 
     `total` is the count of MATCHING rows, not of the table -- a search whose
     total ignores its own filter makes the pager lie about how many pages
     exist. It is computed from the SAME query object, join included, so the
     two cannot drift apart."""
     limit, offset = clamp_limit(limit), clamp_offset(offset)
-    query = db.query(Conversation).outerjoin(User, Conversation.user_id == User.id)
+    query = _conversations_with_participant(db)
     # `q and q.strip()`, deliberately: `?q=` (an empty or whitespace-only
     # search box) lists the whole table rather than returning nothing. That is
     # what a search box should do when it is cleared, and spelling it out here
@@ -293,6 +315,19 @@ def list_conversations(
         .limit(limit).offset(offset).all()
     )
     return Page(items=items, total=int(total), limit=limit, offset=offset)
+
+
+def get_conversation_with_participant(db: Session, conversation_id) -> tuple | None:
+    """Single-conversation counterpart of `list_conversations`, for
+    `GET /admin/conversations/{id}` -- reads through the identical
+    OUTER JOIN so the detail view's participant name can never disagree
+    with what the list just showed for the same conversation. Returns
+    `(Conversation, username, full_name)` or `None`."""
+    return (
+        _conversations_with_participant(db)
+        .filter(Conversation.id == conversation_id)
+        .one_or_none()
+    )
 
 
 def list_audit(

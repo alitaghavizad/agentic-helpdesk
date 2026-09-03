@@ -35,14 +35,21 @@ const STATUS_TONE: Record<string, BadgeTone> = {
 /**
  * `Conversation.user_id` XOR `guest_name`+`guest_email` (a DB CHECK
  * constraint enforces exactly one -- backend/app/db/models.py), so this
- * never has to guess which branch applies. `ConversationSummary` carries no
- * username -- only `user_id` -- because `GET /api/admin/conversations`
- * never joins `users` into its response shape (only the search query does,
- * server-side, to match against it); showing the id itself is the only
- * honest option here rather than inventing a name the API never sent.
+ * never has to guess which branch applies.
+ *
+ * `ConversationSummary` now carries `full_name`/`username` for the
+ * `user_id` case (backend/app/admin/queries.py's `_conversations_with_
+ * participant` -- the same OUTER JOIN `GET /api/admin/conversations?q=`
+ * already used to MATCH a username/full_name, just also selected into the
+ * response). Without this, an admin who searched "jamie" and got a row
+ * back had no way to see that "jamie" was what matched -- the id alone
+ * doesn't tell you why the row is here. `full_name` wins when both are
+ * present (it is what a person recognises); the id is the last resort,
+ * for the edge case of a `user_id` whose `users` row cannot be joined
+ * (a race with account deletion, not a case the schema forbids outright).
  */
 function participantLabel(row: ConversationSummary): string {
-  if (row.user_id) return `User ${row.user_id}`;
+  if (row.user_id) return row.full_name ?? row.username ?? `User ${row.user_id}`;
   if (row.guest_name && row.guest_email) return `${row.guest_name} <${row.guest_email}>`;
   if (row.guest_name) return row.guest_name;
   if (row.guest_email) return row.guest_email;
@@ -182,6 +189,16 @@ export function Conversations() {
     setSelectedRunId(undefined);
   }
 
+  function handleSearchChange(value: string) {
+    setQ(value);
+    // A new search term can filter the previously-selected conversation
+    // right out of the list -- leaving the detail panel open would show a
+    // transcript and run list for a row the admin can no longer even see
+    // above it, with no way to tell it is now orphaned from the filter.
+    setSelectedId(undefined);
+    setSelectedRunId(undefined);
+  }
+
   const columns: Column<ConversationSummary>[] = [
     {
       key: "title",
@@ -202,7 +219,7 @@ export function Conversations() {
         <input
           type="search"
           value={q}
-          onChange={(event) => setQ(event.target.value)}
+          onChange={(event) => handleSearchChange(event.target.value)}
           placeholder="Search by title or participant"
           aria-label="Search conversations"
           className="w-72 rounded border border-slate-300 px-2 py-1 text-sm"

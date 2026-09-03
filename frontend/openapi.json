@@ -332,6 +332,17 @@
             ],
             "title": "Created At"
           },
+          "full_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Full Name"
+          },
           "guest_email": {
             "anyOf": [
               {
@@ -383,6 +394,17 @@
               }
             ],
             "title": "User Id"
+          },
+          "username": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Username"
           }
         },
         "required": [
@@ -392,6 +414,8 @@
           "user_id",
           "guest_name",
           "guest_email",
+          "username",
+          "full_name",
           "created_at"
         ],
         "title": "ConversationSummary",

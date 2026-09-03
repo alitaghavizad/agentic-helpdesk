@@ -600,6 +600,57 @@ def _authenticated_conversation(db_session, marker):
     return owner, conv
 
 
+def test_conversation_list_surfaces_the_authenticated_participants_name(client, db_session):
+    """Task 8 review finding: the search already matches on username/
+    full_name (queries.list_conversations' join), but the response used to
+    carry only `user_id` -- an admin who searched "jamie" and found a row
+    had no way to see that "jamie" was what matched. `username`/`full_name`
+    now ride the same join the search already performs, at no extra query."""
+    _user, headers = _admin(client, db_session)
+    marker = uuid.uuid4().hex[:12]
+    owner, conv = _authenticated_conversation(db_session, marker)
+
+    body = client.get(f"/api/admin/conversations?q=ada{marker}", headers=headers).json()
+
+    assert body["items"][0]["id"] == str(conv.id)
+    assert body["items"][0]["username"] == f"ada{marker}"
+    assert body["items"][0]["full_name"] == f"Ada Lovelace {marker}"
+
+
+def test_conversation_detail_surfaces_the_authenticated_participants_name(client, db_session):
+    """The detail endpoint reads through the identical join
+    (queries.get_conversation_with_participant) as the list -- this pins
+    that it actually does, not just that the schema field exists."""
+    _user, headers = _admin(client, db_session)
+    marker = uuid.uuid4().hex[:12]
+    owner, conv = _authenticated_conversation(db_session, marker)
+
+    body = client.get(f"/api/admin/conversations/{conv.id}", headers=headers).json()
+
+    assert body["conversation"]["username"] == f"ada{marker}"
+    assert body["conversation"]["full_name"] == f"Ada Lovelace {marker}"
+
+
+def test_conversation_list_leaves_username_null_for_a_guest(client, db_session):
+    """The guest case must not regress: a guest conversation has no `users`
+    row to join to, so username/full_name are NULL rather than the guest's
+    own name leaking into a field that means something else."""
+    _user, headers = _admin(client, db_session)
+    marker = uuid.uuid4().hex[:12]
+    conv = Conversation(
+        guest_name="Grace Guest", guest_email=f"grace{marker}@northstar.example", title="Untitled",
+    )
+    db_session.add(conv)
+    db_session.flush()
+
+    body = client.get(f"/api/admin/conversations?q=grace{marker}", headers=headers).json()
+
+    assert body["items"][0]["id"] == str(conv.id)
+    assert body["items"][0]["username"] is None
+    assert body["items"][0]["full_name"] is None
+    assert body["items"][0]["guest_name"] == "Grace Guest"
+
+
 def test_conversation_search_finds_an_authenticated_participant_by_username(client, db_session):
     """The bug this replaces: the filter was `title ILIKE q OR guest_name
     ILIKE q`, and the XOR CHECK constraint guarantees guest_name IS NULL
