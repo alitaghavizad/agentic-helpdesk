@@ -13,7 +13,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, NamedTuple
 
-from sqlalchemy import func
+from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
 from app.db.models import (
@@ -157,10 +157,20 @@ def costs(db: Session) -> dict[str, Any]:
             Run.trigger, func.coalesce(func.sum(Run.cost_usd), 0), func.count(Run.id),
         ).group_by(Run.trigger).all()
     ]
+    # `unpriced` counts, per model, how many of that model's spans have a
+    # NULL cost_usd (app/tracing/pricing.py's cost_for returns None when the
+    # model has no known rate). `total` above is coalesced to 0 when every
+    # span in the group is unpriced -- a SUM cannot represent "unknown" --
+    # so without this count a model that costs $0 because nothing prices it
+    # is indistinguishable from one that genuinely cost nothing (spec 17).
     by_model = [
-        {"model": model or "unpriced", "cost_usd": float(total or 0), "calls": int(count)}
-        for model, total, count in db.query(
+        {
+            "model": model or "unpriced", "cost_usd": float(total or 0), "calls": int(count),
+            "unpriced_calls": int(unpriced),
+        }
+        for model, total, count, unpriced in db.query(
             Span.model, func.coalesce(func.sum(Span.cost_usd), 0), func.count(Span.id),
+            func.coalesce(func.sum(case((Span.cost_usd.is_(None), 1), else_=0)), 0),
         ).filter(Span.model.isnot(None)).group_by(Span.model).all()
     ]
     by_user = [
@@ -185,6 +195,11 @@ def costs(db: Session) -> dict[str, Any]:
     # conversation -- report a near-perfect hit rate while barely benefiting
     # from caching at all. Guarded for a fresh install.
     denominator = int(input_tokens) + int(cache_read) + int(cache_write)
+    # Summed from by_model rather than a second query: by_model is already
+    # grouped over every span with a model (the same population this count
+    # needs), so summing its per-model counts cannot drift from a
+    # separately-written aggregate that means to count the same thing.
+    unpriced_calls = sum(row["unpriced_calls"] for row in by_model)
     return {
         "by_day": by_day,
         "by_model": by_model,
@@ -197,6 +212,7 @@ def costs(db: Session) -> dict[str, Any]:
             "cache_write_tokens": int(cache_write),
             "cost_usd": float(total_cost),
             "cache_hit_rate": (int(cache_read) / denominator) if denominator else 0.0,
+            "unpriced_calls": int(unpriced_calls),
         },
     }
 

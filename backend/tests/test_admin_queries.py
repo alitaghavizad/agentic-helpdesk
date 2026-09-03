@@ -13,7 +13,7 @@ import pytest
 from app.admin import queries
 from app.db.models import (
     ApprovalActionType, ApprovalRequest, ApprovalStatus, Conversation, RiskLevel,
-    Run, RunStatus, RunTrigger,
+    Run, RunStatus, RunTrigger, Span, SpanKind, SpanStatus,
 )
 
 
@@ -195,3 +195,94 @@ def test_cache_hit_rate_is_zero_not_a_crash_with_no_tokens(db_session):
     db_session.execute(text("DELETE FROM spans"))
     db_session.execute(text("DELETE FROM runs"))
     assert queries.costs(db_session)["totals"]["cache_hit_rate"] == 0.0
+
+
+def _make_span(run_id, sequence, *, model, cost_usd):
+    """A minimal LLM-kind span for the unpriced_calls tests below. Only the
+    columns queries.costs() actually reads are given real values; the rest
+    take Span's own defaults/nullability."""
+    return Span(
+        run_id=run_id, sequence=sequence, kind=SpanKind.LLM, name="llm_call",
+        status=SpanStatus.OK, model=model, cost_usd=cost_usd,
+    )
+
+
+def test_by_model_reports_unpriced_calls_separately_from_the_coalesced_zero(db_session):
+    """queries.costs()'s by_model coalesces an all-NULL group's SUM to 0 --
+    a SUM cannot represent "unknown" -- so a model with two genuinely-unpriced
+    calls must still show cost_usd == 0.0 (unchanged), but unpriced_calls == 2
+    is what actually says those calls were unpriced rather than free. A
+    sibling model with one priced call must report unpriced_calls == 0."""
+    from sqlalchemy import text
+
+    db_session.execute(text("DELETE FROM spans"))
+    db_session.execute(text("DELETE FROM runs"))
+    run = Run(trigger=RunTrigger.CHAT_TURN, status=RunStatus.OK, started_at=datetime.now(timezone.utc))
+    db_session.add(run)
+    db_session.flush()
+    db_session.add_all([
+        _make_span(run.id, 0, model="priced-model", cost_usd=0.5),
+        _make_span(run.id, 1, model="unpriced-model", cost_usd=None),
+        _make_span(run.id, 2, model="unpriced-model", cost_usd=None),
+    ])
+    db_session.flush()
+
+    by_model = {row["model"]: row for row in queries.costs(db_session)["by_model"]}
+
+    assert by_model["priced-model"]["cost_usd"] == pytest.approx(0.5)
+    assert by_model["priced-model"]["calls"] == 1
+    assert by_model["priced-model"]["unpriced_calls"] == 0
+
+    assert by_model["unpriced-model"]["cost_usd"] == 0.0
+    assert by_model["unpriced-model"]["calls"] == 2
+    assert by_model["unpriced-model"]["unpriced_calls"] == 2
+
+
+def test_totals_unpriced_calls_sums_across_every_model(db_session):
+    from sqlalchemy import text
+
+    db_session.execute(text("DELETE FROM spans"))
+    db_session.execute(text("DELETE FROM runs"))
+    run = Run(trigger=RunTrigger.CHAT_TURN, status=RunStatus.OK, started_at=datetime.now(timezone.utc))
+    db_session.add(run)
+    db_session.flush()
+    db_session.add_all([
+        _make_span(run.id, 0, model="model-a", cost_usd=None),
+        _make_span(run.id, 1, model="model-b", cost_usd=None),
+        _make_span(run.id, 2, model="model-b", cost_usd=1.0),
+    ])
+    db_session.flush()
+
+    result = queries.costs(db_session)
+    # Pinned two ways: against the raw count, and against by_model's own
+    # per-row counts -- the totals field must not drift from the rows it is
+    # supposed to summarise.
+    assert result["totals"]["unpriced_calls"] == 2
+    assert result["totals"]["unpriced_calls"] == sum(
+        row["unpriced_calls"] for row in result["by_model"]
+    )
+
+
+def test_a_span_with_no_model_is_not_counted_as_an_unpriced_call(db_session):
+    """A tool-call span has no model and so was never eligible for pricing
+    in the first place (app/tracing/spans.py only calls cost_for when
+    `self.recorder.model is not None`) -- it is not "unpriced" in the
+    informative sense unpriced_calls exists to flag, it is simply not an
+    LLM call. by_model already excludes these via `Span.model.isnot(None)`;
+    this pins that the new count respects the same boundary."""
+    from sqlalchemy import text
+
+    db_session.execute(text("DELETE FROM spans"))
+    db_session.execute(text("DELETE FROM runs"))
+    run = Run(trigger=RunTrigger.CHAT_TURN, status=RunStatus.OK, started_at=datetime.now(timezone.utc))
+    db_session.add(run)
+    db_session.flush()
+    db_session.add(Span(
+        run_id=run.id, sequence=0, kind=SpanKind.TOOL, name="some_tool",
+        status=SpanStatus.OK, model=None, cost_usd=None,
+    ))
+    db_session.flush()
+
+    result = queries.costs(db_session)
+    assert result["totals"]["unpriced_calls"] == 0
+    assert result["by_model"] == []

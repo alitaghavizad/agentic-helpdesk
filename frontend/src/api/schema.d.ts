@@ -832,6 +832,8 @@ export interface components {
             cost_usd: number;
             /** Model */
             model: string;
+            /** Unpriced Calls */
+            unpriced_calls: number;
         };
         /** CostByTrigger */
         CostByTrigger: {
@@ -872,6 +874,8 @@ export interface components {
             input_tokens: number;
             /** Output Tokens */
             output_tokens: number;
+            /** Unpriced Calls */
+            unpriced_calls: number;
         };
         /** Costs */
         Costs: {

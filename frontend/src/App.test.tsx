@@ -54,4 +54,67 @@ describe("App routing", () => {
     );
     expect(screen.getByText(/page not found/i)).toBeInTheDocument();
   });
+
+
+  it("wires /admin to the real Overview screen, not Task 2's placeholder", async () => {
+    vi.spyOn(ctx, "useAuth").mockReturnValue({
+      status: "signed-in", principal: ADMIN, login: vi.fn(), loginAsGuest: vi.fn(), logout: vi.fn(),
+    } as never);
+    fetchMock.mockImplementation(async (url: string) => {
+      const u = String(url);
+      if (u.endsWith("/api/admin/overview")) {
+        return jsonResponse({
+          runs_today: 1, spend_today: 0, pending_approvals: 0, open_tickets: 0, error_rate: 0,
+        });
+      }
+      if (u.includes("/stream")) {
+        return new Response(new ReadableStream(), { headers: { "content-type": "text/event-stream" } });
+      }
+      return jsonResponse([]);
+    });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter initialEntries={["/admin"]}>
+          <App />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByRole("heading", { name: "Overview" })).toBeInTheDocument();
+    expect(screen.queryByText(/this screen is not built yet/i)).not.toBeInTheDocument();
+  });
+
+  it("wires /admin/costs to the real Costs screen, not Task 2's placeholder", async () => {
+    vi.spyOn(ctx, "useAuth").mockReturnValue({
+      status: "signed-in", principal: ADMIN, login: vi.fn(), loginAsGuest: vi.fn(), logout: vi.fn(),
+    } as never);
+    fetchMock.mockImplementation(async (url: string) => {
+      const u = String(url);
+      if (u.endsWith("/api/admin/costs")) {
+        return jsonResponse({
+          by_day: [], by_model: [], by_user: [], by_trigger: [],
+          totals: {
+            input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0,
+            cost_usd: 0, cache_hit_rate: 0,
+          },
+        });
+      }
+      if (u.includes("/stream")) {
+        return new Response(new ReadableStream(), { headers: { "content-type": "text/event-stream" } });
+      }
+      return jsonResponse([]);
+    });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter initialEntries={["/admin/costs"]}>
+          <App />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByRole("heading", { name: "Costs" })).toBeInTheDocument();
+    expect(screen.queryByText(/this screen is not built yet/i)).not.toBeInTheDocument();
+  });
 });

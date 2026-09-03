@@ -385,9 +385,10 @@ def test_costs_returns_all_four_groupings(client, db_session):
         assert isinstance(body[key], list)
     assert set(body["totals"]) == {
         "input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens",
-        "cost_usd", "cache_hit_rate",
+        "cost_usd", "cache_hit_rate", "unpriced_calls",
     }
     assert 0.0 <= body["totals"]["cache_hit_rate"] <= 1.0
+    assert body["totals"]["unpriced_calls"] >= 0
 
 
 # ---- Ordering (audit_log is the one table whose purpose is being read in order) ----

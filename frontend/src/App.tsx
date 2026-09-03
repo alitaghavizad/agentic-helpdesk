@@ -5,6 +5,8 @@ import { NavBar } from "./components/NavBar";
 import { Chat } from "./pages/Chat";
 import { Login } from "./pages/Login";
 import { Tickets } from "./pages/Tickets";
+import { Overview } from "./pages/Admin/Overview";
+import { Costs } from "./pages/Admin/Costs";
 
 /** NavBar plus the routed page. Only signed-in routes get a shell. */
 function Shell() {
@@ -60,7 +62,7 @@ function App() {
       </Route>
 
       <Route path="/admin/*" element={<RequireRole role="admin"><Shell /></RequireRole>}>
-        <Route index element={<Placeholder title="Admin overview" />} />
+        <Route index element={<Overview />} />
         <Route path="conversations" element={<Placeholder title="Admin conversations" />} />
         <Route path="traces" element={<Placeholder title="Admin traces" />} />
         <Route path="approvals" element={<Placeholder title="Admin approvals" />} />
@@ -68,7 +70,7 @@ function App() {
         <Route path="users" element={<Placeholder title="Admin users" />} />
         <Route path="lessons" element={<Placeholder title="Admin lessons" />} />
         <Route path="audit" element={<Placeholder title="Admin audit" />} />
-        <Route path="costs" element={<Placeholder title="Admin costs" />} />
+        <Route path="costs" element={<Costs />} />
         {/* path="/admin/*" matches and shadows the top-level "*" below for
             anything under /admin, so an unmatched child (e.g. /admin/typo)
             must get its own not-found here or <Outlet/> silently renders

@@ -126,6 +126,14 @@ class CostByModel(BaseModel):
     model: str
     cost_usd: float
     calls: int
+    # How many of `calls` are folded into `cost_usd` as an invisible $0 --
+    # app/tracing/pricing.py's cost_for returns None for a model with no
+    # rate, and queries.costs() coalesces the SUM of an all-NULL group to 0
+    # rather than leaving the aggregate NULL (a SUM cannot represent
+    # "unknown"). Without this count, that 0 is indistinguishable from a
+    # model that genuinely cost nothing (spec 17's exact "confidently wrong
+    # number" failure).
+    unpriced_calls: int
 
 
 class CostByUser(BaseModel):
@@ -146,6 +154,11 @@ class CostTotals(BaseModel):
     cache_write_tokens: int
     cost_usd: float
     cache_hit_rate: float
+    # Same signal as CostByModel.unpriced_calls, summed across every model:
+    # how many LLM-call spans contributed $0 to `cost_usd` above not because
+    # they were free, but because nothing prices them yet. A non-zero count
+    # here means the total understates real spend.
+    unpriced_calls: int
 
 
 class Costs(BaseModel):

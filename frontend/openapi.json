@@ -428,12 +428,17 @@
           "model": {
             "title": "Model",
             "type": "string"
+          },
+          "unpriced_calls": {
+            "title": "Unpriced Calls",
+            "type": "integer"
           }
         },
         "required": [
           "model",
           "cost_usd",
-          "calls"
+          "calls",
+          "unpriced_calls"
         ],
         "title": "CostByModel",
         "type": "object"
@@ -527,6 +532,10 @@
           "output_tokens": {
             "title": "Output Tokens",
             "type": "integer"
+          },
+          "unpriced_calls": {
+            "title": "Unpriced Calls",
+            "type": "integer"
           }
         },
         "required": [
@@ -535,7 +544,8 @@
           "cache_read_tokens",
           "cache_write_tokens",
           "cost_usd",
-          "cache_hit_rate"
+          "cache_hit_rate",
+          "unpriced_calls"
         ],
         "title": "CostTotals",
         "type": "object"

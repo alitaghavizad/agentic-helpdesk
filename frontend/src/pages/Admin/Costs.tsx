@@ -65,6 +65,25 @@ function DayBars({ rows }: { rows: CostByDay[] }) {
  * but `usd()` accepts `number | null | undefined` regardless, so a row that
  * actually arrives with `cost_usd: null` still renders "unpriced" rather
  * than crashing or defaulting to zero.
+ *
+ * `cache_hit_rate`'s label states its denominator explicitly (design spec
+ * 5.3), the same rule Overview follows for `error_rate`: the fraction is
+ * cache reads over EVERY prompt-side token processed -- input tokens, cache
+ * reads, AND cache writes (app/admin/queries.py's `costs`) -- not just
+ * reads plus fresh input. Omitting writes from the denominator would make a
+ * workload that is establishing a cache (a conversation's first turn)
+ * report a near-perfect hit rate while barely benefiting from caching at
+ * all, so a bare "Cache hit rate" label would misdescribe what the number
+ * means in exactly that case.
+ *
+ * `unpriced_calls` (per model, and summed into totals) exists because
+ * `usd(null)` alone is inert defence: app/admin/queries.py's `costs`
+ * coalesces an all-NULL model group's SUM to 0.0 rather than leaving it
+ * NULL (a SUM cannot represent "unknown"), so a wholly-unpriced model's row
+ * arrives as `cost_usd: 0.0` -- indistinguishable, on the wire, from a model
+ * that genuinely cost nothing. The "By model" table's own column surfaces
+ * which model that is; the banner below the totals surfaces that the grand
+ * total itself is an understatement whenever any model has one.
  */
 export function Costs() {
   const query = useQuery({ queryKey: COSTS_QUERY_KEY, queryFn: admin.adminCosts });
@@ -78,6 +97,16 @@ export function Costs() {
     { key: "model", header: "Model", render: (row) => row.model },
     { key: "calls", header: "Calls", render: (row) => tokens(row.calls) },
     { key: "cost", header: "Cost", render: (row) => usd(row.cost_usd) },
+    {
+      key: "unpriced",
+      header: "Unpriced calls",
+      render: (row) =>
+        row.unpriced_calls > 0 ? (
+          <span className="font-medium text-amber-700">{row.unpriced_calls}</span>
+        ) : (
+          <span>0</span>
+        ),
+    },
   ];
   const userColumns: Column<CostByUser>[] = [
     { key: "user", header: "User", render: (row) => row.username },
@@ -99,8 +128,23 @@ export function Costs() {
         <Total label="Cache read tokens" value={tokens(costs.totals.cache_read_tokens)} />
         <Total label="Cache write tokens" value={tokens(costs.totals.cache_write_tokens)} />
         <Total label="Total cost" value={usd(costs.totals.cost_usd)} />
-        <Total label="Cache hit rate" value={pct(costs.totals.cache_hit_rate)} />
+        <Total
+          label="Cache hit rate, of input + cache read + cache write tokens"
+          value={pct(costs.totals.cache_hit_rate)}
+        />
       </div>
+
+      {costs.totals.unpriced_calls > 0 && (
+        // Total cost above is a real number, not a placeholder -- but it is
+        // an UNDERSTATEMENT whenever this is non-zero, since every unpriced
+        // call folded a genuine $0 into that sum instead of its real
+        // (unknown) cost. This is the one signal on the wire that says so.
+        <p className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800">
+          Total cost excludes {tokens(costs.totals.unpriced_calls)} unpriced call
+          {costs.totals.unpriced_calls === 1 ? "" : "s"} with no known price -- the true total is
+          higher than shown.
+        </p>
+      )}
 
       <section>
         <h2 className="mb-2 text-sm font-semibold text-slate-900">Spend by day</h2>

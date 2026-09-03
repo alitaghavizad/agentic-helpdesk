@@ -19,8 +19,8 @@ const COSTS_BODY = {
     { day: "2026-09-02", cost_usd: 40 },
   ],
   by_model: [
-    { model: "claude-opus-5", cost_usd: 25.5, calls: 12 },
-    { model: "gemini-2.5-flash", cost_usd: null, calls: 3 },
+    { model: "claude-opus-5", cost_usd: 25.5, calls: 12, unpriced_calls: 0 },
+    { model: "gemini-2.5-flash", cost_usd: null, calls: 5, unpriced_calls: 3 },
   ],
   by_user: [
     { username: "j.doe", cost_usd: 5.25 },
@@ -37,6 +37,7 @@ const COSTS_BODY = {
     cache_write_tokens: 500,
     cost_usd: 50,
     cache_hit_rate: 0.16,
+    unpriced_calls: 3,
   },
 };
 
@@ -91,6 +92,23 @@ describe("Costs", () => {
     expect(screen.getByText("$50.00")).toBeInTheDocument();
   });
 
+  it("labels cache_hit_rate with its denominator (input + cache read + cache write tokens)", async () => {
+    // app/admin/queries.py's costs() computes cache_read / (input + cache_read
+    // + cache_write) -- deliberately including cache WRITES, not just reads
+    // plus fresh input. A bare "Cache hit rate" would not say that, and the
+    // number is easy to misread without it (design spec 5.3 requires the
+    // denominator be stated, the same rule Overview follows for error_rate).
+    fetchMock.mockImplementation(async (url: string) => {
+      if (String(url).endsWith("/api/admin/costs")) return jsonResponse(COSTS_BODY);
+      throw new Error(`unexpected call: ${url}`);
+    });
+
+    render(<Costs />, { wrapper });
+
+    await screen.findByText("claude-opus-5");
+    expect(screen.getByText(/cache hit rate.*input.*cache read.*cache write/i)).toBeInTheDocument();
+  });
+
   it("renders a by_model row whose cost_usd is null as 'unpriced', never as $0.00", async () => {
     fetchMock.mockImplementation(async (url: string) => {
       if (String(url).endsWith("/api/admin/costs")) return jsonResponse(COSTS_BODY);
@@ -103,6 +121,53 @@ describe("Costs", () => {
     expect(modelRow).not.toBeNull();
     expect(within(modelRow as HTMLElement).getByText("unpriced")).toBeInTheDocument();
     expect(within(modelRow as HTMLElement).queryByText("$0.00")).not.toBeInTheDocument();
+  });
+
+  it("renders each model's unpriced_calls count in the By model table", async () => {
+    // app/admin/queries.py's costs() coalesces an all-NULL model group's
+    // SUM to 0.0, so "gemini-2.5-flash"'s cost_usd: null is not enough on
+    // its own to show its 3 calls carry no known price -- this column is
+    // the field that actually says so, per model.
+    fetchMock.mockImplementation(async (url: string) => {
+      if (String(url).endsWith("/api/admin/costs")) return jsonResponse(COSTS_BODY);
+      throw new Error(`unexpected call: ${url}`);
+    });
+
+    render(<Costs />, { wrapper });
+
+    const unpricedRow = (await screen.findByText("gemini-2.5-flash")).closest("tr") as HTMLElement;
+    const pricedRow = screen.getByText("claude-opus-5").closest("tr") as HTMLElement;
+    expect(within(unpricedRow).getByText("3")).toBeInTheDocument();
+    expect(within(pricedRow).getByText("0")).toBeInTheDocument();
+  });
+
+  it("warns that the total understates spend when totals.unpriced_calls is greater than zero", async () => {
+    fetchMock.mockImplementation(async (url: string) => {
+      if (String(url).endsWith("/api/admin/costs")) return jsonResponse(COSTS_BODY);
+      throw new Error(`unexpected call: ${url}`);
+    });
+
+    render(<Costs />, { wrapper });
+
+    expect(await screen.findByText(/total cost excludes 3 unpriced calls/i)).toBeInTheDocument();
+  });
+
+  it("shows no unpriced-calls warning when every call is priced", async () => {
+    fetchMock.mockImplementation(async (url: string) => {
+      if (String(url).endsWith("/api/admin/costs")) {
+        return jsonResponse({
+          ...COSTS_BODY,
+          by_model: [{ model: "claude-opus-5", cost_usd: 25.5, calls: 12, unpriced_calls: 0 }],
+          totals: { ...COSTS_BODY.totals, unpriced_calls: 0 },
+        });
+      }
+      throw new Error(`unexpected call: ${url}`);
+    });
+
+    render(<Costs />, { wrapper });
+
+    await screen.findByText("claude-opus-5");
+    expect(screen.queryByText(/total cost excludes/i)).not.toBeInTheDocument();
   });
 
   it("sizes the by-day bar widths proportionally to the largest day", async () => {
