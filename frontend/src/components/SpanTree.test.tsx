@@ -94,13 +94,27 @@ describe("SpanTree", () => {
   });
 
   it("renders a span with null duration_ms without breaking the bar layout", () => {
-    // totalMs is 0 here too (a run whose own duration_ms is also still
-    // null, e.g. one that has not finished) -- the scenario where a naive
-    // `duration_ms / totalMs` divides null by zero and produces "NaN%",
-    // an invalid CSS width that a nonzero totalMs would never expose.
+    // totalMs > 0 here (a run that DID finish, e.g. a sibling span
+    // completed) so the `totalMs > 0 ? ... : 0` ternary actually reaches
+    // the numerator -- pinning this with totalMs=0 (the prior version of
+    // this test) would short-circuit before the numerator is ever
+    // evaluated, exercising only the divide-by-zero branch.
+    //
+    // Note on what this can and cannot prove: `node.duration_ms ?? 0` at
+    // SpanTree.tsx cannot be proven by any assertion on rendered output --
+    // JavaScript's `/` operator already coerces `null` to `0`
+    // (`null / 100 === 0`, verified directly), so `(null ?? 0) / 100` and
+    // `null / 100` produce the identical `0` and thus the identical "0%"
+    // width whether or not the `?? 0` is present. The guard's only real
+    // job is satisfying TypeScript's strictNullChecks (`node.duration_ms`
+    // is typed `number | null`, and `null / totalMs` does not type-check
+    // without it) -- removing it is caught by `npm run typecheck`
+    // (TS18047 "possibly null"), not by this or any other runtime test.
+    // This test still stands on its own merits: it pins that a null
+    // duration_ms renders a 0% bar and a "—" label rather than throwing.
     const span = makeSpan({ id: "nulldur", name: "null-duration-span", duration_ms: null });
 
-    render(<SpanTree roots={[span]} totalMs={0} />);
+    render(<SpanTree roots={[span]} totalMs={100} />);
 
     const bar = screen.getByRole("img", { name: /null-duration-span duration/ });
     expect(bar.style.width).toBe("0%");
