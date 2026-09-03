@@ -7,6 +7,7 @@ import { Login } from "./pages/Login";
 import { Tickets } from "./pages/Tickets";
 import { Overview } from "./pages/Admin/Overview";
 import { Costs } from "./pages/Admin/Costs";
+import { Traces } from "./pages/Admin/Traces";
 
 /** NavBar plus the routed page. Only signed-in routes get a shell. */
 function Shell() {
@@ -64,7 +65,8 @@ function App() {
       <Route path="/admin/*" element={<RequireRole role="admin"><Shell /></RequireRole>}>
         <Route index element={<Overview />} />
         <Route path="conversations" element={<Placeholder title="Admin conversations" />} />
-        <Route path="traces" element={<Placeholder title="Admin traces" />} />
+        <Route path="traces" element={<Traces />} />
+        <Route path="traces/:runId" element={<Traces />} />
         <Route path="approvals" element={<Placeholder title="Admin approvals" />} />
         <Route path="tickets" element={<Placeholder title="Admin tickets" />} />
         <Route path="users" element={<Placeholder title="Admin users" />} />

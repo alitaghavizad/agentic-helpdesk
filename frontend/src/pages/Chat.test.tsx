@@ -306,13 +306,56 @@ describe("Chat", () => {
 
     const admin = await run(ADMIN);
     await waitFor(() => expect(screen.getAllByText("All good.")).toHaveLength(1));
-    expect(screen.getAllByText(/view trace/i)).toHaveLength(1);
+    const traceLinks = screen.getAllByText(/view trace/i);
+    expect(traceLinks).toHaveLength(1);
+    // Deep-links to the specific run now that /admin/traces/:runId exists,
+    // rather than the bare list Chat.tsx pointed at before this route did.
+    expect(traceLinks[0]).toHaveAttribute("href", "/admin/traces/r-77");
     admin.unmount();
 
     const employee = await run(EMPLOYEE);
     await waitFor(() => expect(screen.getAllByText("All good.")).toHaveLength(1));
     expect(screen.queryAllByText(/view trace/i)).toHaveLength(0);
     employee.unmount();
+  });
+
+  it("deep-links the LIVE turn's own view-trace link to its run_id, while the transcript stays unpersisted", async () => {
+    // Distinct from the persisted-message link above: this is turn.runId
+    // straight off the live turn state (Chat.tsx's `turn.done && turn.runId`
+    // branch), not `message.run_id` off a stored row. The conversation
+    // detail fetch always answers with an empty transcript, so
+    // `turnPersisted` never becomes true and this is the only "View trace"
+    // link that ever renders.
+    let stream: ReturnType<typeof makeTurnStream> | undefined;
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      const u = String(url);
+      if (u.endsWith("/api/conversations")) return jsonResponse(CONV_LIST);
+      if (u.endsWith("/api/conversations/c1") && init?.method === undefined) {
+        return jsonResponse(conversationDetail("c1", []));
+      }
+      if (u.endsWith("/api/conversations/c1/messages") && init?.method === "POST") {
+        stream = makeTurnStream((init.signal as AbortSignal) ?? undefined);
+        return stream.response;
+      }
+      throw new Error(`unexpected call: ${u} ${init?.method}`);
+    });
+
+    renderChat(ADMIN);
+    await screen.findByText("VPN issue");
+    await userEvent.click(screen.getByText("VPN issue"));
+    await screen.findByText(/no messages yet/i);
+    await userEvent.type(screen.getByLabelText("Message"), "Status?");
+    await userEvent.click(screen.getByRole("button", { name: /send/i }));
+    await waitFor(() => expect(stream).toBeDefined());
+
+    await act(async () => {
+      stream!.send({ type: "token", text: "All good." });
+      stream!.send({ type: "done", run_id: "r-live-1" });
+      stream!.close();
+    });
+
+    const traceLink = await screen.findByText(/view trace/i);
+    expect(traceLink).toHaveAttribute("href", "/admin/traces/r-live-1");
   });
 
   it("renders a view-trace link from a persisted message's own run_id for an admin, with no live turn involved", async () => {
@@ -336,7 +379,11 @@ describe("Chat", () => {
     await userEvent.click(screen.getByText("VPN issue"));
 
     await screen.findByText("Pong");
-    expect(screen.getByText(/view trace/i)).toBeInTheDocument();
+    const traceLink = screen.getByText(/view trace/i);
+    expect(traceLink).toBeInTheDocument();
+    // Comes from message.run_id ("r-99") alone, since no live turn is
+    // involved here -- proves the deep link, not just the link's presence.
+    expect(traceLink).toHaveAttribute("href", "/admin/traces/r-99");
   });
 
   it("keeps the partial answer on screen when an error arrives mid-turn", async () => {

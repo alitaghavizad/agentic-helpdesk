@@ -117,4 +117,31 @@ describe("App routing", () => {
     expect(await screen.findByRole("heading", { name: "Costs" })).toBeInTheDocument();
     expect(screen.queryByText(/this screen is not built yet/i)).not.toBeInTheDocument();
   });
+
+  it("wires /admin/traces to the real Traces screen, not Task 2's placeholder", async () => {
+    vi.spyOn(ctx, "useAuth").mockReturnValue({
+      status: "signed-in", principal: ADMIN, login: vi.fn(), loginAsGuest: vi.fn(), logout: vi.fn(),
+    } as never);
+    fetchMock.mockImplementation(async (url: string) => {
+      const u = String(url);
+      if (u.endsWith("/api/admin/runs?limit=50")) {
+        return jsonResponse({ items: [], limit: 50, offset: 0, total: 0 });
+      }
+      if (u.includes("/stream")) {
+        return new Response(new ReadableStream(), { headers: { "content-type": "text/event-stream" } });
+      }
+      return jsonResponse([]);
+    });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter initialEntries={["/admin/traces"]}>
+          <App />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByRole("heading", { name: "Traces" })).toBeInTheDocument();
+    expect(screen.queryByText(/this screen is not built yet/i)).not.toBeInTheDocument();
+  });
 });

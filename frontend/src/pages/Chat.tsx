@@ -257,7 +257,7 @@ export function Chat() {
                       </p>
                       <p className="whitespace-pre-wrap">{messageText(message.content)}</p>
                       {message.role === "assistant" && message.run_id && principal?.role === "admin" && (
-                        <Link to="/admin/traces" className="mt-1 inline-block text-xs text-blue-700 underline">
+                        <Link to={`/admin/traces/${message.run_id}`} className="mt-1 inline-block text-xs text-blue-700 underline">
                           View trace
                         </Link>
                       )}
@@ -304,9 +304,7 @@ export function Chat() {
                       )}
 
                       {turn.done && turn.runId && principal?.role === "admin" && (
-                        // No /admin/traces/:runId route exists yet -- links
-                        // to the traces list rather than a dead deep link.
-                        <Link to="/admin/traces" className="mt-2 inline-block text-xs text-blue-700 underline">
+                        <Link to={`/admin/traces/${turn.runId}`} className="mt-2 inline-block text-xs text-blue-700 underline">
                           View trace
                         </Link>
                       )}
