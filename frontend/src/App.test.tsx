@@ -198,4 +198,33 @@ describe("App routing", () => {
     expect(await screen.findByRole("heading", { name: "Approvals" })).toBeInTheDocument();
     expect(screen.queryByText(/this screen is not built yet/i)).not.toBeInTheDocument();
   });
+
+  it("wires /admin/tickets to the real Tickets board, not Task 2's placeholder", async () => {
+    vi.spyOn(ctx, "useAuth").mockReturnValue({
+      status: "signed-in", principal: ADMIN, login: vi.fn(), loginAsGuest: vi.fn(), logout: vi.fn(),
+    } as never);
+    fetchMock.mockImplementation(async (url: string) => {
+      const u = String(url);
+      if (u.endsWith("/api/tickets")) return jsonResponse([]);
+      if (u.includes("/stream")) {
+        return new Response(new ReadableStream(), { headers: { "content-type": "text/event-stream" } });
+      }
+      return jsonResponse([]);
+    });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter initialEntries={["/admin/tickets"]}>
+          <App />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByRole("heading", { name: "Tickets" })).toBeInTheDocument();
+    expect(screen.queryByText(/this screen is not built yet/i)).not.toBeInTheDocument();
+    // The board itself, not just the heading -- distinguishing it from the
+    // non-admin /tickets screen, which renders a table with a status
+    // filter dropdown rather than these per-status columns.
+    expect(await screen.findByText("No tickets to show.")).toBeInTheDocument();
+  });
 });

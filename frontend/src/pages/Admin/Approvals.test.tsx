@@ -296,7 +296,7 @@ describe("Approvals", () => {
     await user.click(screen.getByRole("button", { name: "Confirm approve" }));
 
     await screen.findByText("executed");
-    console.log("ACTIVE:", document.activeElement?.outerHTML?.slice(0,120)); console.log("CARD:", card?.outerHTML?.slice(0,120)); expect(card).toHaveFocus();
+    expect(card).toHaveFocus();
     expect(document.activeElement).not.toBe(document.body);
   });
 
