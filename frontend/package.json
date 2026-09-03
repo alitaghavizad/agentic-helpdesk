@@ -10,6 +10,7 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:e2e": "playwright test",
     "typecheck": "tsc -b --noEmit",
     "api:generate": "openapi-typescript openapi.json -o src/api/schema.d.ts",
     "api:check": "cd ../backend && uv run python scripts/dump_openapi.py && cd ../frontend && npm run api:generate && git diff --exit-code openapi.json src/api/schema.d.ts"
@@ -21,6 +22,7 @@
     "react-router-dom": "^7.18.3"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "@tailwindcss/vite": "^4.3.3",
     "@testing-library/dom": "^10.4.1",
     "@testing-library/jest-dom": "^7.0.1",

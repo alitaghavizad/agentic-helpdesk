@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
-import { setAccessToken, setAuthFailureHandler } from "../api/client";
+import { refreshOnce, setAccessToken, setAuthFailureHandler } from "../api/client";
 import * as auth from "../api/endpoints/auth";
 import type { Principal } from "../api/endpoints/auth";
 
@@ -48,16 +48,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // httpOnly refresh cookie is the only path back into a session -- and
   // guests never receive one (app/auth/router.py issues it for kind ==
   // "user" only), so a guest reload correctly lands signed-out.
+  //
+  // Goes through the shared `refreshOnce` mutex rather than calling
+  // `auth.refresh()` directly: StrictMode double-invokes this effect in
+  // dev, and a plain direct call fires two real refresh requests against
+  // the same single-use refresh cookie, 401-ing one of them. Sharing the
+  // in-flight promise collapses that back to one request.
   useEffect(() => {
     setAuthFailureHandler(clear);
     let cancelled = false;
     (async () => {
-      try {
-        const { access_token } = await auth.refresh();
-        if (!cancelled) await adopt(access_token);
-      } catch {
-        if (!cancelled) clear();
-      }
+      const token = await refreshOnce();
+      if (cancelled) return;
+      if (token) await adopt(token);
+      else clear();
     })();
     return () => { cancelled = true; };
   }, [adopt, clear]);

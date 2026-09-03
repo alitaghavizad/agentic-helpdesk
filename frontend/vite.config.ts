@@ -13,5 +13,10 @@ export default defineConfig({
     environment: "jsdom",
     setupFiles: ["./src/test-setup.ts"],
     globals: true,
+    // tests/e2e is Playwright's tree (its own `test` from @playwright/test,
+    // run via `npx playwright test`), not vitest's -- without this exclude,
+    // vitest's default include glob picks up *.spec.ts anywhere and tries
+    // to run Playwright tests as vitest tests, which fails immediately.
+    exclude: ["**/node_modules/**", "**/dist/**", "tests/e2e/**"],
   },
 });

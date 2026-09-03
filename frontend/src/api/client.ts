@@ -38,7 +38,14 @@ export function setAuthFailureHandler(handler: () => void): void {
  */
 let refreshInFlight: Promise<string | null> | null = null;
 
-function refreshOnce(): Promise<string | null> {
+/**
+ * Exported (not just used internally by `send`) so `AuthContext`'s boot
+ * effect can share this exact in-flight promise. Without that, StrictMode's
+ * dev-mode double-invoke of the boot effect fires two real refresh requests
+ * against the same single-use refresh cookie -- the first rotates it, the
+ * second 401s. Routing both through here collapses them back to one.
+ */
+export function refreshOnce(): Promise<string | null> {
   if (!refreshInFlight) {
     refreshInFlight = fetch(`${BASE}${REFRESH_PATH}`, {
       method: "POST",

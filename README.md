@@ -255,3 +255,143 @@ uv run pytest tests/test_admin_dossier_live.py -v -s -m live_dossier
 It is the only test that proves a real model can fill the schema — every
 other dossier test stubs the client and would stay green against a schema
 no model could satisfy.
+
+## Frontend
+
+A React 19 + Vite + TanStack Query admin panel and chat client, in
+`frontend/`. Twelve routes: nine under `/admin` (overview, conversations,
+traces, approvals, tickets, users, lessons, audit, costs), plus `/chat`
+and `/tickets` for everyone else.
+
+### Install
+
+```bash
+cd frontend
+npm install --legacy-peer-deps
+```
+
+`--legacy-peer-deps` is required for every install in this project —
+`openapi-typescript`'s peer range is stale against the pinned TypeScript
+(`~6.0.2`, do not upgrade).
+
+### `.env` setup
+
+```bash
+cp .env.example .env
+```
+
+`VITE_API_BASE` must point at wherever the **backend** actually listens —
+not Chroma, which also defaults to port 8000 and is a different service.
+Check the backend's own `.env` (`BACKEND_HOST`/`BACKEND_PORT`, default
+`127.0.0.1:8080`) before assuming the example's default is right; on a
+machine where 8080 is already taken by something else, the backend's real
+port (and this value) will differ. `frontend/.env.test` pins
+`VITE_API_BASE` to `http://localhost:8000` independently of `.env`, so unit
+tests keep asserting against `api/client.ts`'s own hardcoded fallback
+regardless of what port the live dev backend happens to be on — it is
+picked up automatically by `vitest` (mode `test`) and never affects
+`npm run dev`.
+
+### Running it
+
+```bash
+npm run dev        # Vite dev server on :5173
+```
+
+Needs the backend reachable at `VITE_API_BASE` — see the root README for
+bringing up Postgres, Chroma, and the backend (`db-up`, `migrate`, `seed`,
+`dev`).
+
+### Test layers
+
+```bash
+npm test           # vitest: 246 unit/component tests, fetch stubbed, no real backend
+npm run typecheck  # tsc -b --noEmit (plain `tsc --noEmit` is a silent no-op here)
+npm run build      # tsc -b && vite build
+npm run api:check  # regenerates openapi.json + schema.d.ts from the live backend, fails on drift
+npm run test:e2e   # Playwright, against the REAL stack — see below
+```
+
+`npm run api:generate` regenerates just `src/api/schema.d.ts` from
+`openapi.json` (run `api:check` first if the backend's schema may have
+moved); `src/api/schema.d.ts` itself is never hand-edited.
+
+### The phase 8 gate (`npm run test:e2e`)
+
+Playwright drives a real Chromium browser against the real backend, a
+migrated and seeded Postgres, and Chroma — no stubbed `fetch`, anywhere.
+`playwright.config.ts` starts only the frontend dev server; it deliberately
+does **not** start the backend, so the gate can never silently pass against
+an empty database.
+
+Bring the stack up first (from the repo root):
+
+```bash
+docker start postgres18 chroma
+cd backend
+uv run python tasks.py db-up
+uv run python tasks.py migrate
+uv run python tasks.py seed     # creates 126 accounts: 1 admin + 100 employee + 25 helpdesk
+uv run python tasks.py dev      # keep running for the duration of the gate
+```
+
+Then, in `frontend/`:
+
+```bash
+npx playwright install chromium   # once
+npm run test:e2e
+```
+
+**Measured result (2026-09-03, against a freshly migrated and seeded
+database): 16/16 specs passing.**
+
+- `auth.spec.ts` (4/4) — admin signs in and reaches `/admin`; a seeded
+  employee signs in and reaches `/chat`; a signed-in session survives a
+  page reload (memory-only access token, httpOnly refresh cookie, proven
+  cross-origin — frontend on `:5173`, backend on its own port); a
+  non-admin is redirected away from `/admin`, not shown the panel.
+- `screens.spec.ts` (11/11) — every one of the twelve routes renders a
+  screen-specific element against seeded data, **and** made zero failed
+  (`>= 400`) API calls while loading. Approvals and lessons legitimately
+  render their empty state — neither table is part of the static seed
+  (`backend/app/db/seed.py` creates only user accounts; both fill only
+  from live agent runs, which need `ANTHROPIC_API_KEY` and are out of
+  scope for this gate) — so their markers accept that honest empty state
+  the same way the admin tickets screen's already did.
+- `guest.spec.ts` (1/1) — a guest signs in, reaches `/chat`, and
+  `GET /api/notifications/stream` is never requested on the network
+  (needs no API key: no chat turn is sent).
+
+**Gate proven to actually fail.** Per this phase's standing rule (a gate
+never seen to fail is not known to be a gate), the `runs_today` counter was
+deleted from `Overview.tsx` and the suite re-run: 3 tests failed exactly as
+expected (`admin signs in…`, `a signed-in session survives a page
+reload`, `/admin renders against seeded data` — every assertion on
+"runs today" text). The line was restored and the suite re-run again:
+16/16 passing. Both runs' full output are in
+`.superpowers/sdd/2026-09-02-admin-panel-frontend/task-12-report.md`.
+
+**A real defect the gate caught and the fix applied.** `AuthContext`'s
+boot effect called `auth.refresh()` directly instead of through
+`client.ts`'s shared `refreshInFlight` mutex. React StrictMode
+double-invokes effects in development, so every page load fired two real
+`POST /api/auth/refresh` requests against the same single-use, rotated
+refresh cookie — the first succeeded, the second always 401'd. `screens.spec.ts`'s
+zero-failed-calls assertion caught this on every screen; `AuthContext`'s
+boot effect now goes through the same `refreshOnce()` mutex `client.ts`
+already uses to de-duplicate concurrent 401 retries, collapsing the pair
+back to one request.
+
+**What could not be verified.** The dossier button (`POST
+/tickets/{id}/dossier`, ~36s, a real Claude API call) and a completed chat
+turn are explicitly out of scope for this gate per the phase 8 design —
+only the admin ticket board's own rendering and the chat composer's
+presence are asserted, not either action's outcome. Neither was exercised
+here; both are covered by their own backend tests (`test_admin_dossier*`
+and the chat turn tests) against a stubbed or opt-in-live client.
+
+**Full verification suite, all measured the same day:** frontend unit/
+component tests 246/246, `npm run typecheck` clean, `npm run api:check`
+clean (no OpenAPI drift), `npm run build` succeeds, backend
+`uv run python tasks.py test` 770 passed / 8 deselected (opt-in live
+tests) / 0 failed.
