@@ -151,6 +151,26 @@ for (const [path, marker] of SCREENS) {
     });
 
     await page.goto(path);
+    // Reset here, not before: `page.goto` is a full hard navigation (even
+    // when `path` is the URL already loaded), which tears down whatever
+    // document `signInAsAdmin` left the page on and cancels any of ITS
+    // still-in-flight requests (Overview's own overview/notifications
+    // calls, fired the moment `signInAsAdmin`'s client-side redirect
+    // landed on /admin, milliseconds before this test's listeners even
+    // attached). Those cancellations surface as `requestfailed` events
+    // AFTER the listeners are attached, incrementing `settled` for a
+    // request whose `request` event fired before attachment and so never
+    // incremented `started` -- an asymmetric leftover from the PREVIOUS
+    // page that has nothing to do with the screen under test. Left
+    // unreset, this occasionally desynced the two counters enough that a
+    // later, genuine pending request never brought them back in line
+    // within the timeout (observed as an intermittent `settled < started`
+    // poll timeout under full-suite load, diagnosed and fixed here after
+    // review). Zeroing both immediately after navigation commits scopes
+    // every count that follows to calls this screen's own load actually
+    // makes.
+    started = 0;
+    settled = 0;
     // Chat's composer only renders once a conversation is selected (see
     // fixtures.ts's `startConversation`) -- whether admin already has one
     // depends on what earlier tests/runs did against this seeded database,
