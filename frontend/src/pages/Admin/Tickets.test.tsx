@@ -13,6 +13,12 @@ function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 }
 
+// Task 10 review (Phase 8b): TicketSummary was widened to carry the routing
+// decision directly (matched_specialization, assignment_rationale,
+// assignment_score) -- see backend/app/tickets/router.py and
+// src/api/endpoints/tickets.ts -- so these fixtures, matching one
+// `GET /api/tickets` response shape, are now everything a card needs. There
+// is no separate "detail" fixture or per-ticket detail stub anymore.
 const TICKET_OPEN = {
   id: "t1",
   ticket_number: "TCK-000001",
@@ -20,6 +26,12 @@ const TICKET_OPEN = {
   status: "open",
   priority: "high",
   assignee_helpdesk_ref: "hd-1",
+  matched_specialization: "account_access",
+  assignment_rationale: "Best available match for account-lockout incidents.",
+  // Deliberately carries binary-floating-point noise, the same shape a raw
+  // float off the wire can have -- proves the card renders through the
+  // `score()` formatter rather than interpolating the raw number.
+  assignment_score: 0.8700000000000001,
   created_at: "2026-09-01T00:00:00Z",
 };
 
@@ -30,6 +42,9 @@ const TICKET_ESCALATED = {
   status: "escalated",
   priority: "urgent",
   assignee_helpdesk_ref: "hd-2",
+  matched_specialization: "security_incident",
+  assignment_rationale: "Escalation team has clearance for this category.",
+  assignment_score: 0.95,
   created_at: "2026-09-01T01:00:00Z",
 };
 
@@ -40,21 +55,11 @@ const TICKET_RESOLVED = {
   status: "resolved",
   priority: "low",
   assignee_helpdesk_ref: "hd-3",
+  matched_specialization: "account_access",
+  assignment_rationale: "Routine self-service reset.",
+  assignment_score: 0.6,
   created_at: "2026-09-01T02:00:00Z",
 };
-
-function detailFor(summary: typeof TICKET_OPEN, overrides: Partial<Record<string, unknown>> = {}) {
-  return {
-    ...summary,
-    body: "Full ticket body.",
-    matched_specialization: "account_access",
-    assignment_rationale: "Best available match for account-lockout incidents.",
-    assignment_score: 0.87,
-    resolution: null,
-    resolved_at: null,
-    ...overrides,
-  };
-}
 
 const FULL_DOSSIER: IncidentDossier = {
   ticket_number: "TCK-000001",
@@ -104,9 +109,6 @@ describe("Admin Tickets board", () => {
     fetchMock.mockImplementation(async (url: string) => {
       const u = String(url);
       if (u.endsWith("/api/tickets")) return jsonResponse([TICKET_OPEN, TICKET_ESCALATED, TICKET_RESOLVED]);
-      if (u.endsWith(`/api/tickets/${TICKET_OPEN.id}`)) return jsonResponse(detailFor(TICKET_OPEN));
-      if (u.endsWith(`/api/tickets/${TICKET_ESCALATED.id}`)) return jsonResponse(detailFor(TICKET_ESCALATED));
-      if (u.endsWith(`/api/tickets/${TICKET_RESOLVED.id}`)) return jsonResponse(detailFor(TICKET_RESOLVED));
       throw new Error(`unexpected call: ${u}`);
     });
 
@@ -126,28 +128,53 @@ describe("Admin Tickets board", () => {
     expect(screen.getByText("Password reset request")).toBeInTheDocument();
   });
 
-  it("shows assignee, matched specialization, assignment rationale and assignment score on each card", async () => {
+  it("shows assignee, matched specialization, assignment rationale and a fixed-precision assignment score on each card", async () => {
     fetchMock.mockImplementation(async (url: string) => {
       const u = String(url);
       if (u.endsWith("/api/tickets")) return jsonResponse([TICKET_OPEN]);
-      if (u.endsWith(`/api/tickets/${TICKET_OPEN.id}`)) {
-        return jsonResponse(
-          detailFor(TICKET_OPEN, {
-            matched_specialization: "account_access",
-            assignment_rationale: "Best available match for account-lockout incidents.",
-            assignment_score: 0.87,
-          }),
-        );
-      }
       throw new Error(`unexpected call: ${u}`);
     });
 
     renderBoard();
 
     expect(await screen.findByText("Assignee: hd-1")).toBeInTheDocument();
-    expect(await screen.findByText("account_access")).toBeInTheDocument();
+    expect(screen.getByText("account_access")).toBeInTheDocument();
     expect(screen.getByText("Best available match for account-lockout incidents.")).toBeInTheDocument();
+    // 0.8700000000000001 in the fixture, rendered through score() -- proves
+    // this is not a raw string interpolation of the wire value.
     expect(screen.getByText("0.87")).toBeInTheDocument();
+    expect(screen.queryByText("0.8700000000000001")).not.toBeInTheDocument();
+  });
+
+  it("issues exactly one GET /api/tickets request for the whole board, not one per ticket", async () => {
+    // This is the assertion the N+1 regression needed and didn't have: a
+    // test that only checks the fields render would pass whether they came
+    // from one bulk response or N per-card detail fetches. Counting requests
+    // is what actually distinguishes the two.
+    let ticketsListCalls = 0;
+    fetchMock.mockImplementation(async (url: string) => {
+      const u = String(url);
+      if (u.endsWith("/api/tickets")) {
+        ticketsListCalls += 1;
+        return jsonResponse([TICKET_OPEN, TICKET_ESCALATED, TICKET_RESOLVED]);
+      }
+      throw new Error(`unexpected call: ${u}`);
+    });
+
+    renderBoard();
+
+    expect(await screen.findByText("Cannot log in to the billing portal")).toBeInTheDocument();
+    expect(screen.getByText("Possible data loss reported")).toBeInTheDocument();
+    expect(screen.getByText("Password reset request")).toBeInTheDocument();
+
+    // All three cards' routing fields are on screen already (no further
+    // async fetch pending) -- give react-query a few microtask turns to
+    // prove no additional request shows up, then assert the exact count.
+    await act(async () => {
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+    });
+    expect(ticketsListCalls).toBe(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("enters a pending state on Generate dossier and stays pending through a long-running call, with no client-side timeout", async () => {
@@ -155,7 +182,6 @@ describe("Admin Tickets board", () => {
     fetchMock.mockImplementation(async (url: string) => {
       const u = String(url);
       if (u.endsWith("/api/tickets")) return jsonResponse([TICKET_OPEN]);
-      if (u.endsWith(`/api/tickets/${TICKET_OPEN.id}`)) return jsonResponse(detailFor(TICKET_OPEN));
       if (u.endsWith(`/api/admin/tickets/${TICKET_OPEN.id}/dossier`)) {
         return new Promise<Response>((resolve) => {
           resolveDossier = resolve;
@@ -211,7 +237,6 @@ describe("Admin Tickets board", () => {
     fetchMock.mockImplementation(async (url: string) => {
       const u = String(url);
       if (u.endsWith("/api/tickets")) return jsonResponse([TICKET_OPEN]);
-      if (u.endsWith(`/api/tickets/${TICKET_OPEN.id}`)) return jsonResponse(detailFor(TICKET_OPEN));
       if (u.endsWith(`/api/admin/tickets/${TICKET_OPEN.id}/dossier`)) return jsonResponse(FULL_DOSSIER);
       throw new Error(`unexpected call: ${u}`);
     });
@@ -245,7 +270,6 @@ describe("Admin Tickets board", () => {
     fetchMock.mockImplementation(async (url: string) => {
       const u = String(url);
       if (u.endsWith("/api/tickets")) return jsonResponse([TICKET_OPEN]);
-      if (u.endsWith(`/api/tickets/${TICKET_OPEN.id}`)) return jsonResponse(detailFor(TICKET_OPEN));
       if (u.endsWith(`/api/admin/tickets/${TICKET_OPEN.id}/dossier`)) {
         return jsonResponse({ detail: "The model response failed dossier schema validation." }, 502);
       }
@@ -275,7 +299,6 @@ describe("Admin Tickets board", () => {
     fetchMock.mockImplementation(async (url: string) => {
       const u = String(url);
       if (u.endsWith("/api/tickets")) return jsonResponse([TICKET_OPEN]);
-      if (u.endsWith(`/api/tickets/${TICKET_OPEN.id}`)) return jsonResponse(detailFor(TICKET_OPEN));
       if (u.endsWith(`/api/admin/tickets/${TICKET_OPEN.id}/dossier`)) {
         dossierCallCount += 1;
         if (dossierCallCount === 1) return jsonResponse(FULL_DOSSIER);

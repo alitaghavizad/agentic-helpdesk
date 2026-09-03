@@ -1309,10 +1309,16 @@ export interface components {
         TicketSummary: {
             /** Assignee Helpdesk Ref */
             assignee_helpdesk_ref: string;
+            /** Assignment Rationale */
+            assignment_rationale: string;
+            /** Assignment Score */
+            assignment_score: number;
             /** Created At */
             created_at: string;
             /** Id */
             id: string;
+            /** Matched Specialization */
+            matched_specialization: string;
             /** Priority */
             priority: string;
             /** Status */

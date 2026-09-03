@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { duration, tokens, usd } from "./format";
+import { duration, score, tokens, usd } from "./format";
 
 describe("usd", () => {
   it("renders 'unpriced' for null, never a zero", () => {
@@ -33,5 +33,19 @@ describe("duration", () => {
     expect(duration(1500)).toBe("1.5s");
     expect(duration(95000)).toBe("1m 35s");
     expect(duration(null)).toBe("—");
+  });
+});
+
+describe("score", () => {
+  it("rounds a raw floating-point score to two decimals", () => {
+    // The exact kind of binary-floating-point noise a routing score can
+    // carry off the wire -- 0.87 stored/computed as a float is not always
+    // exactly representable.
+    expect(score(0.8700000000000001)).toBe("0.87");
+  });
+
+  it("renders null/undefined as a dash rather than '0.00'", () => {
+    expect(score(null)).toBe("—");
+    expect(score(undefined)).toBe("—");
   });
 });

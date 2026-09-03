@@ -1813,11 +1813,11 @@
           "status",
           "priority",
           "assignee_helpdesk_ref",
-          "created_at",
-          "body",
           "matched_specialization",
           "assignment_rationale",
           "assignment_score",
+          "created_at",
+          "body",
           "resolution",
           "resolved_at"
         ],
@@ -1852,12 +1852,24 @@
             "title": "Assignee Helpdesk Ref",
             "type": "string"
           },
+          "assignment_rationale": {
+            "title": "Assignment Rationale",
+            "type": "string"
+          },
+          "assignment_score": {
+            "title": "Assignment Score",
+            "type": "number"
+          },
           "created_at": {
             "title": "Created At",
             "type": "string"
           },
           "id": {
             "title": "Id",
+            "type": "string"
+          },
+          "matched_specialization": {
+            "title": "Matched Specialization",
             "type": "string"
           },
           "priority": {
@@ -1884,6 +1896,9 @@
           "status",
           "priority",
           "assignee_helpdesk_ref",
+          "matched_specialization",
+          "assignment_rationale",
+          "assignment_score",
           "created_at"
         ],
         "title": "TicketSummary",

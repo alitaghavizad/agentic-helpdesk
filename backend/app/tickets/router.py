@@ -23,14 +23,21 @@ class TicketSummary(BaseModel):
     status: str
     priority: str
     assignee_helpdesk_ref: str
+    # Task 10 review (Phase 8b): the admin ticket board needs the agent's
+    # routing decision on every card, not just the one ticket a caller has
+    # opened. These three columns are plain NOT NULL fields already loaded
+    # on the same `Ticket` row `serialize_summary` reads everything else
+    # from -- no join, no extra query -- so widening the list response
+    # costs nothing server-side and turns an admin's N-ticket board from
+    # N+1 requests into 1.
+    matched_specialization: str
+    assignment_rationale: str
+    assignment_score: float
     created_at: str
 
 
 class TicketDetail(TicketSummary):
     body: str
-    matched_specialization: str
-    assignment_rationale: str
-    assignment_score: float
     resolution: str | None
     resolved_at: str | None
 
@@ -44,6 +51,9 @@ def serialize_summary(ticket: Ticket) -> TicketSummary:
         id=str(ticket.id), ticket_number=_number(ticket), title=ticket.title,
         status=ticket.status.value, priority=ticket.priority.value,
         assignee_helpdesk_ref=ticket.assignee_helpdesk_ref,
+        matched_specialization=ticket.matched_specialization,
+        assignment_rationale=ticket.assignment_rationale,
+        assignment_score=float(ticket.assignment_score),
         created_at=ticket.created_at.isoformat(),
     )
 
@@ -52,9 +62,6 @@ def serialize_detail(ticket: Ticket) -> TicketDetail:
     return TicketDetail(
         **serialize_summary(ticket).model_dump(),
         body=ticket.body,
-        matched_specialization=ticket.matched_specialization,
-        assignment_rationale=ticket.assignment_rationale,
-        assignment_score=float(ticket.assignment_score),
         resolution=ticket.resolution,
         resolved_at=ticket.resolved_at.isoformat() if ticket.resolved_at else None,
     )

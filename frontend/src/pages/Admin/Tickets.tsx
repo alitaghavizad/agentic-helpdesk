@@ -4,6 +4,7 @@ import type { TicketStatus, TicketSummary } from "../../api/endpoints/tickets";
 import * as admin from "../../api/endpoints/admin";
 import { StateBlock, describeError } from "../../components/StateBlock";
 import { DossierCard } from "../../components/DossierCard";
+import { score } from "../../lib/format";
 
 const STATUSES: TicketStatus[] = ["open", "assigned", "in_progress", "resolved", "closed", "escalated"];
 
@@ -16,46 +17,33 @@ const STATUS_LABEL: Record<TicketStatus, string> = {
   escalated: "Escalated",
 };
 
-function ticketDetailQueryKey(id: string) {
-  return ["admin", "ticket-detail", id] as const;
-}
-
 /**
- * The routing decision the agent made for this ticket -- `matched_specialization`,
- * `assignment_rationale`, `assignment_score` -- which is what an admin looking
- * at this board is actually checking. `GET /api/tickets` (TicketSummary) does
- * not carry these three fields; only `GET /api/tickets/{id}` (TicketDetail)
- * does (backend/app/tickets/router.py). So each card fetches its own detail
- * rather than the board fetching one bulk list -- there is no bulk endpoint
- * that returns them, and this task adds no backend route.
+ * The routing decision the agent made for this ticket --
+ * `matched_specialization`, `assignment_rationale`, `assignment_score` --
+ * which is what an admin looking at this board is actually checking.
+ *
+ * Task 10 review (Phase 8b): this used to be a per-card `GET
+ * /api/tickets/{id}` fetch, because the original `TicketSummary` didn't
+ * carry these three fields. That made an N-ticket board issue N+1 requests
+ * against an unpaginated, unfiltered-for-admin `GET /api/tickets`
+ * (backend/app/tickets/scoping.py's `scope_tickets_query` returns every
+ * row for an admin, and the endpoint has no limit) -- and with the
+ * production `QueryClient`'s default `retry: 3`, a flaky backend turned
+ * that into up to 4N requests. `TicketSummary` now carries all three
+ * fields directly (backend/app/tickets/router.py's `serialize_summary`
+ * reads them off the same `Ticket` row it already reads everything else
+ * from, no extra query), so this reads straight off the ticket the board
+ * already has -- one request for the whole board, not one per card.
  */
-function RoutingDecision({ ticketId }: { ticketId: string }) {
-  const detailQuery = useQuery({
-    queryKey: ticketDetailQueryKey(ticketId),
-    queryFn: () => tickets.getTicket(ticketId),
-  });
-
-  if (detailQuery.isLoading) {
-    return <p className="text-xs text-slate-400">Loading routing details…</p>;
-  }
-  if (detailQuery.isError) {
-    return (
-      <p role="alert" className="text-xs text-red-700">
-        Routing details unavailable: {describeError(detailQuery.error)}
-      </p>
-    );
-  }
-  const detail = detailQuery.data;
-  if (!detail) return null;
-
+function RoutingDecision({ ticket }: { ticket: TicketSummary }) {
   return (
     <dl className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5 text-xs text-slate-600">
       <dt className="font-medium text-slate-500">Specialization</dt>
-      <dd>{detail.matched_specialization}</dd>
+      <dd>{ticket.matched_specialization}</dd>
       <dt className="font-medium text-slate-500">Rationale</dt>
-      <dd>{detail.assignment_rationale}</dd>
+      <dd>{ticket.assignment_rationale}</dd>
       <dt className="font-medium text-slate-500">Score</dt>
-      <dd>{detail.assignment_score}</dd>
+      <dd>{score(ticket.assignment_score)}</dd>
     </dl>
   );
 }
@@ -98,7 +86,7 @@ function TicketCard({ ticket }: { ticket: TicketSummary }) {
       <p className="text-sm font-medium text-slate-900">{ticket.title}</p>
       <p className="text-xs text-slate-500">Assignee: {ticket.assignee_helpdesk_ref || "—"}</p>
 
-      <RoutingDecision ticketId={ticket.id} />
+      <RoutingDecision ticket={ticket} />
 
       <div className="space-y-1 pt-1">
         <button
