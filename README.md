@@ -256,6 +256,50 @@ It is the only test that proves a real model can fill the schema — every
 other dossier test stubs the client and would stay green against a schema
 no model could satisfy.
 
+## Phase 9: the learning loop
+
+No new endpoint — reflection is background work triggered by an existing
+one. When `POST /tickets/{id}/resolve` commits, it schedules
+`app.learning.reflect.reflect(ticket_id)` via FastAPI `BackgroundTasks`,
+which runs after the HTTP response has already gone out: resolving a
+ticket never waits on a model call.
+
+**What happens.** `reflect()` gathers the ticket's own fields, its `Task`,
+and the conversation transcript, then asks Claude whether the resolution
+taught something worth keeping. The call and its outcome are always traced
+as a `Run` (`trigger=reflection`) — whether or not a lesson gets written,
+the call was made and billed, and it belongs in cost accounting. If the
+model judges the resolution worth recording, a markdown file is written
+under `knowledge/lessons/`, a `lessons` row is inserted, and the lesson is
+embedded into Chroma's `lessons` collection, making it retrievable through
+the agent's existing `search_lessons` tool the next time a similar problem
+comes in.
+
+**The `should_record` judgment call is the model's, not a heuristic.** Most
+tickets are routine (a password reset, a re-issued badge) and should teach
+nothing; recording every resolution would poison retrieval with noise,
+worse than recording nothing. `search_lessons_handler`'s own
+`where={"status": "active"}` filter also means an admin can archive a bad
+lesson (`DELETE /api/admin/lessons/{id}`, phase 8a) to withdraw it from
+retrieval without deleting the record that it existed.
+
+**A failed reflection never surfaces anywhere but the log and the run's
+own error status.** Nobody is waiting on it — the resolve response already
+went out — so a model failure, a schema violation, or an embedding failure
+ends the run as `error` and stops there.
+
+**Live reflection check.** One opt-in test makes a real, paid Anthropic
+call and is excluded from the default run:
+
+```bash
+uv run pytest tests/test_learning_live.py -v -m live_reflection
+```
+
+It is the only test that proves a real model can fill the `Lesson` schema
+and that `search_lessons` genuinely retrieves what got embedded — every
+other reflection test stubs the client and would stay green against a
+schema no model could satisfy or a Chroma query that never ran.
+
 ## Frontend
 
 A React 19 + Vite + TanStack Query admin panel and chat client, in
