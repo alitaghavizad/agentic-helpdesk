@@ -157,7 +157,7 @@ class _FakeRagBackend:
 
 
 class TestUpsertEmbedding:
-    async def test_upserts_content_and_metadata_including_status(self, db_session, monkeypatch):
+    async def test_upserts_content_and_metadata_including_status(self, db_session, monkeypatch, cleanup_run):
         from app.db.models import Lesson as DbLesson, LessonConfidence, LessonStatus, Run, RunStatus, RunTrigger
         import app.learning.writer as writer_module
 
@@ -180,6 +180,14 @@ class TestUpsertEmbedding:
         db_session.add(lesson)
         db_session.flush()  # assigns lesson.id without committing
 
+        # upsert_embedding sees no ambient run (the one above lives only in
+        # db_session's uncommitted savepoint) and so owns a fresh one via
+        # get_sessionmaker() -- a genuinely separate, committed connection
+        # that db_session's rollback at teardown never touches. Captured by
+        # trigger + started_at so it can be cleaned up explicitly, the same
+        # pattern test_admin_lessons_reembed.py's leaked-run test uses.
+        before = db_session.query(Run.started_at).filter(Run.trigger == RunTrigger.LESSON_EDIT).order_by(Run.started_at.desc()).first()
+
         await writer_module.upsert_embedding(lesson)
 
         assert len(fake_backend.upserts) == 1
@@ -191,9 +199,16 @@ class TestUpsertEmbedding:
         assert call["metadatas"][0]["applies_to"] == "a, b"
         assert call["metadatas"][0]["lesson_id"] == str(lesson.id)
 
+        query = db_session.query(Run.id).filter(Run.trigger == RunTrigger.LESSON_EDIT)
+        if before is not None:
+            query = query.filter(Run.started_at > before[0])
+        owned_run = query.order_by(Run.started_at.desc()).first()
+        assert owned_run is not None, "expected upsert_embedding to have started its own Run"
+        cleanup_run(owned_run[0])
+
 
 class TestCreateLesson:
-    async def test_writes_file_inserts_row_and_embeds(self, db_session, make_ticket, monkeypatch, tmp_path):
+    async def test_writes_file_inserts_row_and_embeds(self, db_session, make_ticket, monkeypatch, tmp_path, cleanup_run):
         from app.db.models import Lesson as DbLesson, Run, RunStatus, RunTrigger
         from app.learning.reflect import Lesson
         import app.learning.writer as writer_module
@@ -211,6 +226,12 @@ class TestCreateLesson:
         run_id = run.id
         lesson = Lesson(**_valid_lesson_kwargs())
 
+        # create_lesson's own call to upsert_embedding finds no ambient run
+        # (the REFLECTION run above lives only in db_session's uncommitted
+        # savepoint) and so owns a fresh, genuinely committed one -- see the
+        # identical note in TestUpsertEmbedding above.
+        before = db_session.query(Run.started_at).filter(Run.trigger == RunTrigger.REFLECTION).order_by(Run.started_at.desc()).first()
+
         db_lesson = await writer_module.create_lesson(db_session, ticket=ticket, lesson=lesson, run_id=run_id)
         db_session.commit()
 
@@ -225,7 +246,14 @@ class TestCreateLesson:
         stored = db_session.query(DbLesson).filter(DbLesson.id == db_lesson.id).one()
         assert stored.content_md == db_lesson.content_md
 
-    async def test_a_failed_embed_leaves_embedded_at_none_and_propagates(self, db_session, make_ticket, monkeypatch, tmp_path):
+        query = db_session.query(Run.id).filter(Run.trigger == RunTrigger.REFLECTION, Run.id != run_id)
+        if before is not None:
+            query = query.filter(Run.started_at > before[0])
+        owned_run = query.order_by(Run.started_at.desc()).first()
+        assert owned_run is not None, "expected upsert_embedding to have started its own Run"
+        cleanup_run(owned_run[0])
+
+    async def test_a_failed_embed_leaves_embedded_at_none_and_propagates(self, db_session, make_ticket, monkeypatch, tmp_path, cleanup_run):
         """create_lesson must stamp embedded_at only on a successful embed
         (module docstring's design D7) -- never fabricate it if upsert_embedding
         fails. Also asserts the exception itself propagates: the caller
@@ -257,8 +285,20 @@ class TestCreateLesson:
         db_session.flush()
         lesson = Lesson(**_valid_lesson_kwargs())
 
+        # upsert_embedding still owns (and, on this failure path, ERRORs)
+        # its own committed Run before re-raising -- see the identical note
+        # in TestUpsertEmbedding above.
+        before = db_session.query(Run.started_at).filter(Run.trigger == RunTrigger.REFLECTION).order_by(Run.started_at.desc()).first()
+
         with pytest.raises(RuntimeError, match="chroma is down"):
             await writer_module.create_lesson(db_session, ticket=ticket, lesson=lesson, run_id=run.id)
 
         stored = db_session.query(DbLesson).filter(DbLesson.ticket_id == ticket.id).one()
         assert stored.embedded_at is None
+
+        query = db_session.query(Run.id).filter(Run.trigger == RunTrigger.REFLECTION, Run.id != run.id)
+        if before is not None:
+            query = query.filter(Run.started_at > before[0])
+        owned_run = query.order_by(Run.started_at.desc()).first()
+        assert owned_run is not None, "expected upsert_embedding to have started its own Run"
+        cleanup_run(owned_run[0])
