@@ -522,7 +522,11 @@ class Lesson(Base):
         SAEnum(LessonStatus, name="lesson_status", values_callable=lambda x: [e.value for e in x]), nullable=False, default=LessonStatus.ACTIVE
     )
     created_by_run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("runs.id"), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(server_default=func.now(), nullable=False)
+    # Indexed: the admin lessons list's ORDER BY. See migration
+    # c3f6a1d8e2b7.
+    created_at: Mapped[datetime] = mapped_column(
+        server_default=func.now(), nullable=False, index=True,
+    )
 
 
 # ---- Notifications ----------------------------------------------------------------
