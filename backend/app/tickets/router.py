@@ -3,12 +3,13 @@ from __future__ import annotations
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 from app.audit.service import actor_from_principal, record_audit
 from app.db.models import Role, Ticket, TicketPriority, TicketStatus, User
 from app.deps import CurrentPrincipal, DbSession, require_role
+from app.learning.reflect import reflect
 from app.rbac.policy import Principal
 from app.tickets.scoping import can_read_ticket, scope_tickets_query
 from app.tickets.service import InvalidTransition, reassign, resolve_ticket, transition_status
@@ -196,6 +197,7 @@ class ResolveTicketRequest(BaseModel):
 @router.post("/{ticket_id}/resolve", response_model=TicketDetail)
 def resolve_ticket_endpoint(
     ticket_id: uuid.UUID, payload: ResolveTicketRequest, principal: StaffPrincipal, db: DbSession,
+    background_tasks: BackgroundTasks,
 ) -> TicketDetail:
     ticket = load_readable_ticket(db, principal, ticket_id)
 
@@ -221,4 +223,10 @@ def resolve_ticket_endpoint(
     )
     db.commit()
     db.refresh(ticket)
+    # Scheduled AFTER commit: reflect() opens its own session and reads the
+    # ticket by id, so the resolution must already be durably committed
+    # before the background task can possibly run (BackgroundTasks fires
+    # after the response, but "after commit" is the real invariant that
+    # matters here, not "after response").
+    background_tasks.add_task(reflect, ticket.id)
     return serialize_detail(ticket)
