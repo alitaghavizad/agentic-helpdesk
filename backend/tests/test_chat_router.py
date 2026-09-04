@@ -239,3 +239,44 @@ def test_sse_message_endpoint_streams_events(client, db_session, monkeypatch):
     events = [json.loads(line.removeprefix("data: ")) for line in body.splitlines() if line.startswith("data: ")]
     assert any(e["type"] == "token" for e in events)
     assert events[-1]["type"] == "done"
+
+
+def test_the_first_message_sets_the_conversation_title_and_later_ones_dont(client, db_session, monkeypatch):
+    """No code path anywhere in this app has ever set a conversation's
+    title -- POST /api/conversations is always called with no title
+    argument, so every conversation showed as "(untitled)" forever. Fixed
+    by deriving one from the first user message; this pins both halves:
+    the first message sets it, and a second message never overwrites it,
+    the same way a real subject line isn't replaced by a reply."""
+    headers, user = _make_hard_committed_user_and_login(client)
+    conv = _hard_committed_conversation(user.id)
+    conv_id = str(conv.id)
+
+    fake_client = FakeAnthropicClient([
+        make_text_message(text="Happy to help."),
+        make_text_message(text="Got it, thanks for the detail."),
+    ])
+    import app.chat.router as router_module
+    monkeypatch.setattr(router_module, "_anthropic_client", fake_client)
+
+    with client.stream(
+        "POST", f"/api/conversations/{conv_id}/messages",
+        json={"content": "My VPN client rejects the certificate after the root CA rotation"}, headers=headers,
+    ) as resp:
+        assert resp.status_code == 200
+        "".join(resp.iter_text())
+
+    db_session.expire_all()
+    stored = db_session.query(Conversation).filter_by(id=conv.id).one()
+    assert stored.title == "My VPN client rejects the certificate after the root CA..."
+
+    with client.stream(
+        "POST", f"/api/conversations/{conv_id}/messages",
+        json={"content": "It started right after IT rotated the root certificate"}, headers=headers,
+    ) as resp:
+        assert resp.status_code == 200
+        "".join(resp.iter_text())
+
+    db_session.expire_all()
+    stored = db_session.query(Conversation).filter_by(id=conv.id).one()
+    assert stored.title == "My VPN client rejects the certificate after the root CA..."

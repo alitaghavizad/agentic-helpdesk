@@ -31,6 +31,32 @@ def create_conversation(
     return conv
 
 
+_TITLE_MAX_LENGTH = 60
+
+
+def derive_conversation_title(text: str) -> str:
+    """Best-effort title from a conversation's first user message.
+
+    No code path anywhere in this app has ever supplied a title (the
+    frontend's "New conversation" button calls createConversation() with no
+    argument, and nothing set one afterward either), so every conversation
+    showed as "(untitled)" forever -- the admin conversations screen's own
+    header comment promises "searchable by title and participant" for a
+    field nothing ever populated. Truncates at a word boundary rather than
+    mid-word; returns "" for blank input so a caller can leave the title
+    unset rather than overwrite None with an empty string."""
+    stripped = text.strip()
+    if not stripped:
+        return ""
+    if len(stripped) <= _TITLE_MAX_LENGTH:
+        return stripped
+    truncated = stripped[:_TITLE_MAX_LENGTH]
+    last_space = truncated.rfind(" ")
+    if last_space > 0:
+        truncated = truncated[:last_space]
+    return truncated + "..."
+
+
 def list_conversations(db: Session, principal: Principal) -> list[Conversation]:
     query = db.query(Conversation)
     if principal.kind == "user":

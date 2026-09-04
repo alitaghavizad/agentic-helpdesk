@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 
-from app.chat.service import append_message, create_conversation, get_conversation, list_conversations, load_history
+from app.chat.service import append_message, create_conversation, derive_conversation_title, get_conversation, list_conversations, load_history
 from app.db.models import MessageRole, Role, User
 from app.rbac.policy import Principal
 
@@ -34,6 +34,30 @@ def test_create_conversation_for_guest_requires_guest_contact_info(db_session):
     conv = create_conversation(db_session, _guest_principal(), guest_name="Visitor", guest_email="visitor@example.com")
     assert conv.user_id is None
     assert conv.guest_email == "visitor@example.com"
+
+
+def test_derive_conversation_title_returns_short_text_unchanged():
+    assert derive_conversation_title("my mouse is laggy") == "my mouse is laggy"
+
+
+def test_derive_conversation_title_strips_surrounding_whitespace():
+    assert derive_conversation_title("  hi there  \n") == "hi there"
+
+
+def test_derive_conversation_title_truncates_long_text_at_a_word_boundary():
+    text = "My VPN client has started rejecting the certificate the helpdesk issued after last week's root CA rotation"
+    title = derive_conversation_title(text)
+    assert len(title) <= 63  # 60 + "..."
+    assert title.endswith("...")
+    assert not title[:-3].endswith(" ")  # trimmed the trailing partial word, not just cut mid-word
+    assert text.startswith(title[:-3])
+
+
+def test_derive_conversation_title_of_blank_text_is_empty():
+    """Callers must be able to tell "nothing to derive from" apart from a
+    real title, so they can leave an existing None title alone rather than
+    overwriting it with an empty string."""
+    assert derive_conversation_title("   ") == ""
 
 
 def test_list_conversations_is_row_scoped_to_the_principal(db_session):

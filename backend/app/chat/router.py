@@ -11,7 +11,7 @@ from pydantic import BaseModel
 
 from app.agent.loop import run_turn
 from app.chat.schemas import MessageView, transcript_of
-from app.chat.service import append_message, create_conversation, get_conversation, list_conversations, load_history, stage_message
+from app.chat.service import append_message, create_conversation, derive_conversation_title, get_conversation, list_conversations, load_history, stage_message
 from app.config import get_settings
 from app.db.models import MessageRole
 from app.deps import CurrentPrincipal, DbSession
@@ -117,6 +117,15 @@ async def send_message_endpoint(conversation_id: uuid.UUID, payload: SendMessage
     conv = get_conversation(db, principal, conversation_id)
     if conv is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "no such conversation")
+
+    if conv.title is None:
+        # Best-effort, from the first user message only -- see
+        # derive_conversation_title's own docstring for why this exists at
+        # all. Later messages never override it: a conversation's title is
+        # set once, the same way its first message sets its subject.
+        derived_title = derive_conversation_title(payload.content)
+        if derived_title:
+            conv.title = derived_title
 
     history = load_history(db, conversation_id)
     attachment_blocks, pending_attachments = build_attachment_blocks(db, conversation_id)
