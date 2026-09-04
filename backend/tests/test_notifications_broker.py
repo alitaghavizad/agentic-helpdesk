@@ -94,3 +94,23 @@ async def test_publish_from_worker_thread_is_safe():
         # Event should be received despite coming from another thread
         event = await asyncio.wait_for(sub.get(), timeout=2)
         assert event == {"type": "from_worker_thread"}
+
+
+def test_offer_with_a_closed_loop_drops_the_subscriber_not_raises():
+    """A Subscription's captured event loop can close before broker.publish
+    is ever called against it (e.g. the SSE connection's own loop shutting
+    down before subscribe()'s finally has unregistered it yet). Without a
+    guard, call_soon_threadsafe against a closed loop raises RuntimeError,
+    which would escape publish() and break delivery to every OTHER
+    subscriber on the same call -- publish() is called from SQLAlchemy's
+    synchronous after_commit hook per this module's own docstring, so this
+    would break a real commit path if it ever fired."""
+    user = uuid.uuid4()
+    with broker.subscribe(user) as sub:
+        closed_loop = asyncio.new_event_loop()
+        closed_loop.close()
+        sub._loop = closed_loop
+
+        broker.publish(user, {"type": "wont_be_delivered"})
+
+        assert sub.dropped is True

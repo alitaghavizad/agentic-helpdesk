@@ -84,7 +84,15 @@ class Subscription:
         are sync `def`, Starlette runs them in a threadpool, NOT on the
         event loop. Touching an asyncio.Queue from another thread races the
         loop's internals, so cross-thread offers are marshalled back onto
-        the owning loop."""
+        the owning loop.
+
+        The owning loop can have closed by the time this runs (the SSE
+        connection's own loop shutting down before subscribe()'s finally
+        has unregistered this subscription yet) -- call_soon_threadsafe
+        against a closed loop raises RuntimeError synchronously. Caught
+        here and treated exactly like _put's QueueFull branch: this
+        subscriber is simply unusable now, and that must never break
+        delivery to every OTHER subscriber on the same publish() call."""
         if self.dropped:
             return
         if self._loop is not None:
@@ -93,7 +101,10 @@ class Subscription:
             except RuntimeError:
                 running = None
             if running is not self._loop:
-                self._loop.call_soon_threadsafe(self._put, event)
+                try:
+                    self._loop.call_soon_threadsafe(self._put, event)
+                except RuntimeError:
+                    self.dropped = True
                 return
         self._put(event)
 
