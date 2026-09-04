@@ -5,8 +5,8 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import (
-    Boolean, CheckConstraint, DateTime, ForeignKey, Identity, Integer, Numeric,
-    String, Text, UniqueConstraint, func,
+    Boolean, CheckConstraint, DateTime, ForeignKey, ForeignKeyConstraint, Identity,
+    Index, Integer, Numeric, String, Text, UniqueConstraint, func,
 )
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
@@ -363,6 +363,13 @@ class Ticket(Base):
 
 class ApprovalRequest(Base):
     __tablename__ = "approval_requests"
+    __table_args__ = (
+        # Sole purpose: be a valid target for outbound_emails' composite FK
+        # below. id is already the PK, so this is trivially satisfied and
+        # costs only the index Postgres builds for it. Added by migration
+        # 211125c17904; declared here to close alembic drift.
+        UniqueConstraint("id", "status", name="uq_approval_requests_id_status"),
+    )
 
     id: Mapped[uuid.UUID] = _uuid_pk()
     request_number: Mapped[int] = mapped_column(Integer, Identity(start=1), unique=True, nullable=False)
@@ -389,6 +396,22 @@ class ApprovalRequest(Base):
 
 class OutboundEmail(Base):
     __tablename__ = "outbound_emails"
+    __table_args__ = (
+        # Spec 5.3's invariant lives in the database: this FK mirrors the
+        # approval's status with ON UPDATE CASCADE, and the CHECK forbids
+        # the pre-approval states. Both added by migration 211125c17904;
+        # declared here to close alembic drift, not to change behavior --
+        # the database has enforced both since that migration ran.
+        ForeignKeyConstraint(
+            ["approval_request_id", "approval_status_at_send"],
+            ["approval_requests.id", "approval_requests.status"],
+            name="fk_outbound_emails_approval_status", onupdate="CASCADE",
+        ),
+        CheckConstraint(
+            "approval_status_at_send IN ('approved', 'executed', 'failed')",
+            name="ck_outbound_emails_approved_before_send",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = _uuid_pk()
     approval_request_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("approval_requests.id"), nullable=False)
@@ -533,6 +556,11 @@ class Lesson(Base):
 
 class Notification(Base):
     __tablename__ = "notifications"
+    __table_args__ = (
+        # Added by migration 211125c17904; declared here to close alembic
+        # drift.
+        Index("ix_notifications_user_id_read_at", "user_id", "read_at"),
+    )
 
     id: Mapped[uuid.UUID] = _uuid_pk()
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
