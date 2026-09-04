@@ -84,12 +84,21 @@ def _material():
 
 class TestGatherMaterial:
     def test_includes_ticket_and_task_fields_and_conversation_transcript(self, db_session, make_ticket):
+        """Design decision D9 promises the prompt reads 'the ticket, its
+        Task, and the conversation transcript' -- this test's own name has
+        said 'and_task_fields' since it was first written, but nothing in
+        it ever asserted on a Task-derived field until now, which is
+        exactly how gather_material shipped with no Task query at all."""
         from app.chat.service import append_message
-        from app.db.models import MessageRole
+        from app.db.models import MessageRole, Severity, Task
         from app.learning.reflect import gather_material
 
         ticket = make_ticket(title="VPN keeps dropping")
         ticket.resolution = "Reset the tunnel MTU to 1400."
+        task = db_session.query(Task).filter(Task.id == ticket.task_id).one()
+        task.severity = Severity.HIGH
+        task.summary = "Corporate VPN drops every few minutes for remote staff."
+        task.affected_systems = ["vpn-gateway", "radius-server"]
         db_session.commit()
         append_message(db_session, ticket.conversation_id, MessageRole.USER, [{"type": "text", "text": "My VPN keeps dropping"}])
         db_session.commit()
@@ -100,6 +109,9 @@ class TestGatherMaterial:
         assert "VPN keeps dropping" in material.content
         assert "Reset the tunnel MTU to 1400." in material.content
         assert ticket.matched_specialization in material.content
+        assert "high" in material.content
+        assert "Corporate VPN drops every few minutes for remote staff." in material.content
+        assert "vpn-gateway" in material.content and "radius-server" in material.content
 
 
 class TestBuildLesson:

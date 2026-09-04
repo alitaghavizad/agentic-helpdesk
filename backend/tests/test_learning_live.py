@@ -73,6 +73,37 @@ def _sweep_committed_rows_after_module():
             except Exception:
                 pass
 
+        # The Lesson row is gone from Postgres, but nothing in the app ever
+        # calls RagBackend.delete() in production -- lessons are archived,
+        # never hard-deleted, by design (writer.py's module docstring,
+        # design D7). A test that hard-deletes the row must clean up its
+        # Chroma counterpart itself, or every live-gate run leaves one more
+        # orphaned, permanently status=active document in the real
+        # "lessons" collection -- the exact contamination class a
+        # whole-branch review found (and fixed, for a different set of
+        # tests) elsewhere in this phase.
+        if _committed["lessons"]:
+            import asyncio
+
+            from app.db.models import Run, RunStatus, RunTrigger
+            from app.rag.backend import get_rag_backend
+            from app.tracing.spans import end_run, start_run
+
+            handle = start_run(RunTrigger.CHAT_TURN)
+            try:
+                asyncio.run(get_rag_backend().delete("lessons", [str(lid) for lid in _committed["lessons"]]))
+            except Exception:
+                pass
+            finally:
+                try:
+                    end_run(handle, status=RunStatus.OK)
+                except Exception:
+                    pass
+                with get_sessionmaker()() as cleanup_session:
+                    cleanup_session.query(Span).filter(Span.run_id == handle.run_id).delete()
+                    cleanup_session.query(Run).filter(Run.id == handle.run_id).delete()
+                    cleanup_session.commit()
+
 
 def _build_committed_ticket():
     from app.db.models import (

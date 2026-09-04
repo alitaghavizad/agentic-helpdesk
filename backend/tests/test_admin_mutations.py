@@ -112,6 +112,65 @@ def _make_lesson(db_session, **overrides) -> Lesson:
     return lesson
 
 
+@pytest.fixture(autouse=True)
+def _fake_rag_backend_for_lesson_reembeds(monkeypatch):
+    """Phase 9 wired admin_patch_lesson/admin_archive_lesson to actually
+    re-embed via writer.upsert_embedding (app/learning/writer.py) -- before
+    that, this file's lesson tests only touched the DB/audit-log side, so
+    they were hermetic. Left unmocked, they call the REAL get_rag_backend()
+    (chroma_backend="mcp" by default) on every run, writing orphaned
+    documents straight into the real Chroma "lessons" collection with no
+    way to ever clean them up, since the Postgres Lesson row this test
+    embeds never truly commits (db_session's savepoint rolls back) but the
+    Chroma write already happened on a separate, real connection. Some
+    land with metadata status=active, meaning search_lessons_handler's own
+    where={"status": "active"} filter does not exclude them from a real
+    agent's retrieval -- confirmed against the live collection (65 stray
+    documents, 13 active, titles like "Corrected"/"Retitled" and bodies of
+    literally "body") before this fixture existed. None of these tests
+    assert anything about the embed itself, only the DB/audit-log side
+    effects, so a fake backend is the correct fix, not a workaround.
+
+    Faking the backend stops the real Chroma write, but NOT the Run
+    bookkeeping around it: upsert_embedding's run-owning chokepoint (Task
+    5) starts and commits a real Run via get_sessionmaker() regardless of
+    which backend answers the call, so every lesson PATCH/DELETE in this
+    file still leaked one committed `lesson_edit` Run row per call even
+    with the fake backend in place -- confirmed empirically (146 -> 154
+    rows across this file's 8 real lesson mutations before this sweep was
+    added). Swept below the same way, by trigger + started_at range,
+    since a single test (the idempotent-delete one) can create more than
+    one."""
+    import app.admin.router as admin_router_module
+    from app.db.models import Run, RunTrigger, Span
+    from app.db.session import get_sessionmaker
+
+    class _FakeBackend:
+        async def upsert(self, collection, ids, documents, metadatas):
+            pass
+
+    monkeypatch.setattr(admin_router_module.writer, "get_rag_backend", lambda: _FakeBackend())
+
+    Session = get_sessionmaker()
+    with Session() as s:
+        before = (
+            s.query(Run.started_at).filter(Run.trigger == RunTrigger.LESSON_EDIT)
+            .order_by(Run.started_at.desc()).first()
+        )
+
+    yield
+
+    with Session() as s:
+        query = s.query(Run.id).filter(Run.trigger == RunTrigger.LESSON_EDIT)
+        if before is not None:
+            query = query.filter(Run.started_at > before[0])
+        run_ids = [r[0] for r in query.all()]
+        if run_ids:
+            s.query(Span).filter(Span.run_id.in_(run_ids)).delete(synchronize_session=False)
+            s.query(Run).filter(Run.id.in_(run_ids)).delete(synchronize_session=False)
+            s.commit()
+
+
 # ---- Hard-committed rows and their sweep ------------------------------------------
 
 # Only the single-transaction test below hard-commits, and it must: the whole

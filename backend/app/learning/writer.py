@@ -63,9 +63,26 @@ def render_markdown(lesson, *, ticket_number: int, created_at: datetime) -> str:
 
 
 def write_lesson_file(*, content_md: str, ticket_number: int, title: str, created_at: datetime) -> str:
+    """A ticket CAN be resolved more than once -- tickets/service.py's
+    LEGAL_TRANSITIONS explicitly allows RESOLVED -> IN_PROGRESS -> RESOLVED
+    specifically so this module reads a fresh `resolution` as ground truth
+    each time. Two same-day reflections on the same ticket with a similar
+    enough LLM-generated title would otherwise collide on this exact
+    filename with no warning, silently overwriting one lesson's file with
+    another's content while both DB rows and Chroma entries still claim to
+    point at it -- and if the SECOND reflection's embed then fails,
+    create_lesson's own cleanup-on-failure would delete that shared path,
+    destroying the first lesson's already-successful file. Disambiguated
+    here by construction (never overwrite, always find a free name) rather
+    than by adding more timestamp precision, which only shrinks the window
+    without closing it."""
     KNOWLEDGE_LESSONS_DIR.mkdir(parents=True, exist_ok=True)
-    filename = f"{created_at:%Y-%m-%d}-TCK-{ticket_number:06d}-{slugify(title)}.md"
-    path = KNOWLEDGE_LESSONS_DIR / filename
+    base = f"{created_at:%Y-%m-%d}-TCK-{ticket_number:06d}-{slugify(title)}"
+    path = KNOWLEDGE_LESSONS_DIR / f"{base}.md"
+    suffix = 2
+    while path.exists():
+        path = KNOWLEDGE_LESSONS_DIR / f"{base}-{suffix}.md"
+        suffix += 1
     path.write_text(content_md, encoding="utf-8")
     return str(path)
 

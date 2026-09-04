@@ -18,7 +18,7 @@ from anthropic import AsyncAnthropic
 from pydantic import BaseModel, ValidationError
 from sqlalchemy.orm import Session
 
-from app.db.models import Message, MessageRole, RunStatus, RunTrigger, Ticket
+from app.db.models import Message, MessageRole, RunStatus, RunTrigger, Task, Ticket
 from app.tracing.spans import SpanKind, end_run, span, start_run
 
 logger = logging.getLogger(__name__)
@@ -72,9 +72,13 @@ class LessonWithRun:
 
 def gather_material(db: Session, ticket: Ticket) -> ReflectionMaterial:
     """Reads everything the reflection prompt needs: the ticket's own
-    fields, the routing decision that assigned it, and the conversation
-    that produced it -- not the full span tree, which is the dossier's
-    job for a different reader (design decision D9)."""
+    fields, its Task, the routing decision that assigned it, and the
+    conversation that produced it -- not the full span tree, which is the
+    dossier's job for a different reader (design decision D9). `task_id` is
+    a real NOT NULL FK to `tasks.id`, so `.one()` is correct here, not a
+    defensive `.one_or_none()`: a ticket with no backing task is a data
+    integrity violation, not a case to silently degrade the prompt for."""
+    task = db.query(Task).filter(Task.id == ticket.task_id).one()
     messages = (
         db.query(Message)
         .filter(Message.conversation_id == ticket.conversation_id, Message.role != MessageRole.SYSTEM)
@@ -88,6 +92,10 @@ def gather_material(db: Session, ticket: Ticket) -> ReflectionMaterial:
         f"Priority: {ticket.priority.value}\n"
         f"Assigned to: {ticket.assignee_helpdesk_ref} (matched specialization: {ticket.matched_specialization})\n"
         f"Assignment rationale: {ticket.assignment_rationale}\n\n"
+        f"Task category: {task.category.value}\n"
+        f"Task severity: {task.severity.value}\n"
+        f"Task summary: {task.summary}\n"
+        f"Affected systems: {', '.join(task.affected_systems)}\n\n"
         f"Ticket body:\n{ticket.body}\n\n"
         f"Resolution:\n{ticket.resolution}\n\n"
         f"Conversation transcript:\n{transcript}"
@@ -155,9 +163,22 @@ async def build_lesson(client: AsyncAnthropic, material: ReflectionMaterial) -> 
     return LessonWithRun(lesson=parsed, run_id=handle.run_id)
 
 
+# Module-level singleton, same pattern and rationale as app/chat/router.py's
+# and app/admin/dossier.py's identical _get_client: constructing a fresh
+# AsyncAnthropic (and its underlying httpx connection pool) on every call
+# accumulates unclosed pools under sustained ticket-resolution volume, since
+# nothing ever calls its aclose() and Python GC does not deterministically
+# close an async httpx transport. A test can still stub this out entirely
+# via monkeypatch.setattr(reflect_module, "_get_client", ...).
+_anthropic_client: object | None = None
+
+
 def _get_client() -> AsyncAnthropic:
-    from app.config import get_settings
-    return AsyncAnthropic(api_key=get_settings().anthropic_api_key)
+    global _anthropic_client
+    if _anthropic_client is None:
+        from app.config import get_settings
+        _anthropic_client = AsyncAnthropic(api_key=get_settings().anthropic_api_key)
+    return _anthropic_client
 
 
 async def reflect(ticket_id: uuid.UUID) -> None:

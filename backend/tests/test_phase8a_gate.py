@@ -63,6 +63,49 @@ def _admin(client, db_session):
     return _login(client, db_session, username=f"g8{uuid.uuid4().hex[:12]}", role=Role.ADMIN)
 
 
+@pytest.fixture(autouse=True)
+def _fake_rag_backend_for_lesson_reembeds(monkeypatch):
+    """Phase 9 wired admin_patch_lesson/admin_archive_lesson to actually
+    re-embed via writer.upsert_embedding -- this gate's own
+    test_every_mutation_writes_an_audit_row PATCHes then DELETEs a lesson
+    and, left unmocked, would call the REAL get_rag_backend() on every run,
+    writing orphaned documents into the real Chroma "lessons" collection
+    that can never be cleaned up (the Postgres Lesson row it embeds never
+    truly commits, but the Chroma write is on a separate, real connection).
+    See the identical fixture and its full rationale, including the
+    matching Run-row sweep below (faking the backend stops the real Chroma
+    write but not upsert_embedding's own committed Run bookkeeping), in
+    tests/test_admin_mutations.py."""
+    import app.admin.router as admin_router_module
+    from app.db.models import Run, RunTrigger, Span
+    from app.db.session import get_sessionmaker
+
+    class _FakeBackend:
+        async def upsert(self, collection, ids, documents, metadatas):
+            pass
+
+    monkeypatch.setattr(admin_router_module.writer, "get_rag_backend", lambda: _FakeBackend())
+
+    Session = get_sessionmaker()
+    with Session() as s:
+        before = (
+            s.query(Run.started_at).filter(Run.trigger == RunTrigger.LESSON_EDIT)
+            .order_by(Run.started_at.desc()).first()
+        )
+
+    yield
+
+    with Session() as s:
+        query = s.query(Run.id).filter(Run.trigger == RunTrigger.LESSON_EDIT)
+        if before is not None:
+            query = query.filter(Run.started_at > before[0])
+        run_ids = [r[0] for r in query.all()]
+        if run_ids:
+            s.query(Span).filter(Span.run_id.in_(run_ids)).delete(synchronize_session=False)
+            s.query(Run).filter(Run.id.in_(run_ids)).delete(synchronize_session=False)
+            s.commit()
+
+
 @pytest.mark.parametrize("path", READ_PATHS)
 def test_every_admin_read_endpoint_answers_for_an_admin(client, db_session, path):
     _user, headers = _admin(client, db_session)

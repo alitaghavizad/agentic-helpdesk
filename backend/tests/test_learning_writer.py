@@ -126,6 +126,30 @@ def test_write_lesson_file_creates_the_directory_if_missing(tmp_path, monkeypatc
         created_at=datetime.now(timezone.utc),
     )
 
+
+def test_write_lesson_file_disambiguates_a_same_day_same_title_collision(tmp_path, monkeypatch):
+    """A ticket resolved twice on the same day with a similarly-titled
+    lesson both times would otherwise silently overwrite the first file --
+    reproduced directly: with the disambiguation removed (reverting to the
+    bare f"{base}.md" path), this test's second write clobbers the first
+    and both assertions below fail (the first path's content becomes "two"
+    instead of "one", and the second write returns the SAME path as the
+    first instead of a distinct one)."""
+    import app.learning.writer as writer_module
+
+    lessons_dir = tmp_path / "knowledge" / "lessons"
+    monkeypatch.setattr(writer_module, "KNOWLEDGE_LESSONS_DIR", lessons_dir)
+
+    created_at = datetime(2026, 9, 4, 9, 0, 0, tzinfo=timezone.utc)
+    later_same_day = datetime(2026, 9, 4, 17, 0, 0, tzinfo=timezone.utc)
+
+    path1 = write_lesson_file(content_md="one", ticket_number=42, title="VPN certificate issue", created_at=created_at)
+    path2 = write_lesson_file(content_md="two", ticket_number=42, title="VPN certificate issue", created_at=later_same_day)
+
+    assert path1 != path2
+    assert Path(path1).read_text() == "one"
+    assert Path(path2).read_text() == "two"
+
     assert lessons_dir.exists()
 
 
