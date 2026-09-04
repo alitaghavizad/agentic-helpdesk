@@ -176,3 +176,144 @@ class TestBuildLesson:
         run = db_session.query(Run).filter(Run.trigger == RunTrigger.REFLECTION).order_by(Run.started_at.desc()).first()
         assert run.status == RunStatus.ERROR
         cleanup_run(run.id)
+
+
+class _FakeRagBackend:
+    def __init__(self):
+        self.upserts: list[dict] = []
+
+    async def upsert(self, collection, ids, documents, metadatas):
+        self.upserts.append({"collection": collection, "ids": ids, "documents": documents, "metadatas": metadatas})
+
+    async def heartbeat(self):
+        return True
+
+    async def query(self, collection, query_text, where, k):
+        return {"ids": [], "documents": [], "metadatas": [], "distances": []}
+
+    async def delete(self, collection, ids):
+        pass
+
+
+def _committed_ticket():
+    """Builds the Conversation/Run/Task/Ticket chain through a real,
+    hard-committing session rather than the conftest `make_ticket` fixture.
+
+    reflect() opens its OWN session via get_sessionmaker()() -- a genuinely
+    separate connection from db_session's savepoint-scoped one. Measured:
+    a ticket built through make_ticket()/db_session is invisible there --
+    reflect() logs "ticket that no longer exists" and returns immediately,
+    for every TestReflect test, deterministically, in isolation. This is
+    the identical, already-documented gap tests/test_admin_dossier_live.py's
+    `_committed_ticket` helper and tests/test_approvals_service.py's
+    `pending_request` fixture already exist to work around for build_dossier
+    and decide() respectively -- same fix, applied here for reflect().
+    """
+    from app.db.models import (
+        Conversation, Run, RunStatus, RunTrigger, Severity, Task, TaskCategory,
+        Ticket, TicketPriority, TicketStatus,
+    )
+    from app.db.session import get_sessionmaker
+
+    Session = get_sessionmaker()
+    with Session() as s:
+        conv = Conversation(guest_name="Guest", guest_email="guest@example.com")
+        s.add(conv)
+        run = Run(trigger=RunTrigger.CHAT_TURN, status=RunStatus.OK)
+        s.add(run)
+        s.commit()
+
+        task = Task(
+            conversation_id=conv.id, user_id=None, guest_email="guest@example.com",
+            title="Ticket title", category=TaskCategory.VPN_NETWORK, severity=Severity.MEDIUM,
+            summary="s", affected_systems=[], evidence={}, classified_by_run_id=run.id,
+        )
+        s.add(task)
+        s.commit()
+
+        ticket = Ticket(
+            task_id=task.id, conversation_id=conv.id,
+            requester_user_id=None, requester_guest_email="guest@example.com",
+            assignee_helpdesk_ref="HD-901", matched_specialization="Network and VPN Support",
+            assignment_rationale="seeded by _committed_ticket", assignment_score=0.9,
+            priority=TicketPriority.MEDIUM, status=TicketStatus.OPEN, title="Ticket title", body="Body",
+        )
+        s.add(ticket)
+        s.commit()
+        return ticket.id, conv.id, task.id
+
+
+def _cleanup_committed_ticket(ticket_id, conv_id, task_id):
+    """Deletes everything _committed_ticket hard-committed, plus whatever
+    reflect() itself added on top (a Lesson row, a REFLECTION run) --
+    build_lesson's start_run(conversation_id=...) stamps the REFLECTION
+    run with the SAME conversation_id as the seed CHAT_TURN run, so
+    filtering Run by conversation_id sweeps both in one query."""
+    from app.db.models import Conversation, Lesson as DbLesson, Run, Span, Task, Ticket
+    from app.db.session import get_sessionmaker
+
+    Session = get_sessionmaker()
+    with Session() as s:
+        s.query(DbLesson).filter(DbLesson.ticket_id == ticket_id).delete()
+        run_ids = [r.id for r in s.query(Run.id).filter(Run.conversation_id == conv_id)]
+        if run_ids:
+            s.query(Span).filter(Span.run_id.in_(run_ids)).delete(synchronize_session=False)
+            s.query(Run).filter(Run.id.in_(run_ids)).delete(synchronize_session=False)
+        s.query(Ticket).filter(Ticket.id == ticket_id).delete()
+        s.query(Task).filter(Task.id == task_id).delete()
+        s.query(Conversation).filter(Conversation.id == conv_id).delete()
+        s.commit()
+
+
+class TestReflect:
+    async def test_records_a_lesson_when_should_record_is_true(self, monkeypatch, tmp_path):
+        import app.learning.reflect as reflect_module
+        import app.learning.writer as writer_module
+        from app.db.models import Lesson as DbLesson
+        from app.db.session import get_sessionmaker
+
+        ticket_id, conv_id, task_id = _committed_ticket()
+
+        monkeypatch.setattr(writer_module, "KNOWLEDGE_LESSONS_DIR", tmp_path)
+        monkeypatch.setattr(writer_module, "get_rag_backend", lambda: _FakeRagBackend())
+        monkeypatch.setattr(reflect_module, "_get_client", lambda: _FakeAsyncClient(result=_valid_lesson()))
+
+        await reflect_module.reflect(ticket_id)
+
+        Session = get_sessionmaker()
+        with Session() as s:
+            lesson = s.query(DbLesson).filter(DbLesson.ticket_id == ticket_id).one_or_none()
+            assert lesson is not None
+            assert lesson.embedded_at is not None
+
+        _cleanup_committed_ticket(ticket_id, conv_id, task_id)
+
+    async def test_records_nothing_when_should_record_is_false(self, monkeypatch):
+        import app.learning.reflect as reflect_module
+        from app.db.models import Lesson as DbLesson, Run, RunTrigger
+        from app.db.session import get_sessionmaker
+
+        ticket_id, conv_id, task_id = _committed_ticket()
+
+        monkeypatch.setattr(reflect_module, "_get_client", lambda: _FakeAsyncClient(result=_valid_lesson(should_record=False)))
+
+        await reflect_module.reflect(ticket_id)
+
+        Session = get_sessionmaker()
+        with Session() as s:
+            assert s.query(DbLesson).filter(DbLesson.ticket_id == ticket_id).count() == 0
+            run = s.query(Run).filter(Run.trigger == RunTrigger.REFLECTION, Run.conversation_id == conv_id).order_by(Run.started_at.desc()).first()
+            assert run is not None
+
+        _cleanup_committed_ticket(ticket_id, conv_id, task_id)
+
+    async def test_a_failed_reflection_never_raises(self, monkeypatch):
+        import app.learning.reflect as reflect_module
+
+        ticket_id, conv_id, task_id = _committed_ticket()
+        monkeypatch.setattr(reflect_module, "_get_client", lambda: _FakeAsyncClient(raises=RuntimeError("network exploded")))
+
+        try:
+            await reflect_module.reflect(ticket_id)  # must not raise
+        finally:
+            _cleanup_committed_ticket(ticket_id, conv_id, task_id)

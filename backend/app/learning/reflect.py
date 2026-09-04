@@ -153,3 +153,56 @@ async def build_lesson(client: AsyncAnthropic, material: ReflectionMaterial) -> 
 
     _end_run_quietly(handle, status=RunStatus.OK)
     return LessonWithRun(lesson=parsed, run_id=handle.run_id)
+
+
+def _get_client() -> AsyncAnthropic:
+    from app.config import get_settings
+    return AsyncAnthropic(api_key=get_settings().anthropic_api_key)
+
+
+async def reflect(ticket_id: uuid.UUID) -> None:
+    """The module's one public entrypoint (design spec 4.1). Opens its own
+    session -- never the caller's, which by the time this runs (scheduled
+    via BackgroundTasks from the resolve endpoint) no longer exists.
+
+    Never raises. Nobody is waiting on a reflection: the resolve response
+    already went out before this function is even called. A failure here
+    is logged and the run it started (if it got that far) is marked ERROR;
+    it never affects the ticket, which is already resolved and correct
+    regardless of what reflection does (design decision D5).
+    """
+    from app.db.session import get_sessionmaker
+    from app.learning import writer
+
+    Session = get_sessionmaker()
+    with Session() as db:
+        ticket = db.get(Ticket, ticket_id)
+        if ticket is None:
+            logger.warning("reflect() called for a ticket that no longer exists: %s", ticket_id)
+            return
+
+        material = gather_material(db, ticket)
+        client = _get_client()
+
+        try:
+            result = await build_lesson(client, material)
+        except ReflectionFailed as exc:
+            logger.warning("reflection failed for ticket TCK-%06d: %s", ticket.ticket_number, exc)
+            return
+        except Exception:  # noqa: BLE001 -- see docstring: this must never propagate
+            logger.exception("reflection raised an unexpected error for ticket TCK-%06d", ticket.ticket_number)
+            return
+
+        if not result.lesson.should_record:
+            logger.info("reflection did not record a lesson for ticket TCK-%06d", ticket.ticket_number)
+            return
+
+        try:
+            db_lesson = await writer.create_lesson(db, ticket=ticket, lesson=result.lesson, run_id=result.run_id)
+            db.commit()
+        except Exception:  # noqa: BLE001
+            db.rollback()
+            logger.exception("failed to write the lesson for ticket TCK-%06d", ticket.ticket_number)
+            return
+
+        logger.info("recorded lesson %s for ticket TCK-%06d", db_lesson.id, ticket.ticket_number)
