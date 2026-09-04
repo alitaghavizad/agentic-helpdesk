@@ -2,8 +2,43 @@ import asyncio
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "scripts"))
 import eval_retrieval  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _cleanup_ingest_eval_runs():
+    """eval_retrieval.run_eval() commits a real Run(trigger=INGEST_EVAL) via
+    start_run()/end_run() on every call -- there is no stuck-RUNNING bug
+    (the script brackets both correctly), but nothing ever deletes the
+    finalized row. This file's recall-retry loop can call run_eval() up to
+    twice per test; left unswept, this accumulates permanently in the
+    shared dev Postgres runs table. Same before/after started_at range
+    pattern used repeatedly in the phase 9 learning-loop work for the
+    identical leak class."""
+    from app.db.models import Run, RunTrigger, Span
+    from app.db.session import get_sessionmaker
+
+    Session = get_sessionmaker()
+    with Session() as s:
+        before = (
+            s.query(Run.started_at).filter(Run.trigger == RunTrigger.INGEST_EVAL)
+            .order_by(Run.started_at.desc()).first()
+        )
+
+    yield
+
+    with Session() as s:
+        query = s.query(Run.id).filter(Run.trigger == RunTrigger.INGEST_EVAL)
+        if before is not None:
+            query = query.filter(Run.started_at > before[0])
+        run_ids = [r[0] for r in query.all()]
+        if run_ids:
+            s.query(Span).filter(Span.run_id.in_(run_ids)).delete(synchronize_session=False)
+            s.query(Run).filter(Run.id.in_(run_ids)).delete(synchronize_session=False)
+            s.commit()
 
 # The design spec targets Recall@5 >= 0.70 (see docs/superpowers/specs/... section 7.3),
 # and scripts/eval_retrieval.py's RECALL_5_GATE stays at 0.7 on purpose -- `make eval` is

@@ -11,6 +11,38 @@ import ingest_dataset  # noqa: E402
 from app.config import get_settings
 
 
+@pytest.fixture(autouse=True)
+def _cleanup_ingest_eval_runs():
+    """ingest_dataset.main() commits a real Run(trigger=INGEST_EVAL) via
+    start_run()/end_run() on every call -- there is no stuck-RUNNING bug
+    (the script brackets both correctly), but nothing ever deletes the
+    finalized row. This file's tests call main() up to three times each;
+    left unswept, this accumulates permanently in the shared dev Postgres
+    runs table. Same before/after started_at range pattern used repeatedly
+    in the phase 9 learning-loop work for the identical leak class."""
+    from app.db.models import Run, RunTrigger, Span
+    from app.db.session import get_sessionmaker
+
+    Session = get_sessionmaker()
+    with Session() as s:
+        before = (
+            s.query(Run.started_at).filter(Run.trigger == RunTrigger.INGEST_EVAL)
+            .order_by(Run.started_at.desc()).first()
+        )
+
+    yield
+
+    with Session() as s:
+        query = s.query(Run.id).filter(Run.trigger == RunTrigger.INGEST_EVAL)
+        if before is not None:
+            query = query.filter(Run.started_at > before[0])
+        run_ids = [r[0] for r in query.all()]
+        if run_ids:
+            s.query(Span).filter(Span.run_id.in_(run_ids)).delete(synchronize_session=False)
+            s.query(Run).filter(Run.id.in_(run_ids)).delete(synchronize_session=False)
+            s.commit()
+
+
 async def test_ingest_dataset_missing_dataset_dir_raises(monkeypatch, tmp_path):
     # A missing/misconfigured DATASET_DIR must fail loudly rather than
     # silently "succeeding" with 0 chunks ingested (Path.glob() on a

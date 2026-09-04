@@ -9,6 +9,8 @@ build/
 .pytest_cache/
 .pytest_tmp/
 storage/uploads/
+knowledge/lessons/
 .worktrees/
 .claude/worktrees/
+.claude/launch.json
 .superpowers/
