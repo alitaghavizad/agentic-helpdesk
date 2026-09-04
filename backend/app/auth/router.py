@@ -127,7 +127,17 @@ def refresh(response: Response, db: DbSession, refresh_token: RefreshCookie = No
     if claims.get("type") != "refresh":
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid token type")
     token_hash = hash_refresh_token(refresh_token)
-    stored = db.query(RefreshToken).filter_by(token_hash=token_hash).one_or_none()
+    # populate_existing() is required alongside with_for_update(), not
+    # decoration: with_for_update() alone takes the row lock but the ORM's
+    # identity map still returns whatever instance it already had cached,
+    # so a second concurrent caller would wait for the lock and then read
+    # the STALE pre-lock revoked_at anyway -- the exact trap phase 6's
+    # approval-decision race already paid to learn (see decide() in
+    # app/approvals/service.py).
+    stored = (
+        db.query(RefreshToken).filter_by(token_hash=token_hash)
+        .populate_existing().with_for_update().one_or_none()
+    )
     if stored is None or stored.revoked_at is not None or stored.expires_at < datetime.now(timezone.utc):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Refresh token no longer valid")
     user = db.get(User, stored.user_id)
