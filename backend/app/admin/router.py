@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import uuid
 from datetime import datetime
 from typing import Annotated
@@ -30,12 +31,16 @@ from app.approvals import service as approvals
 from app.audit.service import record_audit
 from app.chat.schemas import transcript_of
 from app.db.models import (
-    ActorType, ApprovalStatus, Clearance, Lesson, LessonStatus, Role, User,
+    ActorType, ApprovalStatus, Clearance, Lesson, LessonStatus, Role, RunStatus, RunTrigger, User,
 )
 from app.deps import DbSession, require_role
+from app.learning import writer
 from app.notifications import broker
 from app.rbac.policy import Principal
+from app.tracing.spans import end_run, start_run
 from app.tracing.store import trace_tree
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -607,6 +612,42 @@ def _audit_dossier(
     db.commit()
 
 
+def _end_run_quietly(handle, *, status: RunStatus, error: str | None = None) -> None:
+    """Same rationale as build_dossier's/build_lesson's identical helper:
+    tracing is observability, not the product, and a failure finalizing the
+    Run must never turn an embed that already succeeded -- or already
+    failed for its own, already-reported reason -- into a second, different
+    failure."""
+    try:
+        end_run(handle, status=status, error=error)
+    except Exception:  # noqa: BLE001
+        logger.exception("failed to finalize lesson-edit run %s; it stays RUNNING", handle.run_id)
+
+
+async def _reembed(lesson: Lesson) -> None:
+    """writer.upsert_embedding's real backend (McpChromaBackend) wraps every
+    Chroma call in a tracing span, and span() hard-requires an active Run --
+    unlike a chat turn, a dossier build, or a reflection, an admin PATCH/
+    DELETE has no ambient Run of its own, so this owns one end-to-end, the
+    same responsibility split build_dossier and build_lesson use for the
+    same reason.
+
+    Deliberately passes neither `conversation_id` nor `user_id`: this Run
+    exists only to satisfy span()'s precondition for the embed call, not to
+    attribute the edit to an admin -- that attribution already lives on the
+    `lesson.updated`/`lesson.archived` audit_log row written just above each
+    call site, and Run.user_id is a real FK to `users.id` that a second,
+    genuinely-committed lookup would have to satisfy for no added value."""
+    handle = start_run(RunTrigger.LESSON_EDIT)
+    try:
+        await writer.upsert_embedding(lesson)
+    except Exception as exc:  # noqa: BLE001
+        _end_run_quietly(handle, status=RunStatus.ERROR, error=f"{type(exc).__name__}: {exc}")
+        raise
+    else:
+        _end_run_quietly(handle, status=RunStatus.OK)
+
+
 def _lesson_row(lesson) -> dict:
     """The `LessonSummary` shape, shared by the list endpoint and the PATCH
     response -- extracted so the two cannot disagree about what a
@@ -632,7 +673,7 @@ def admin_lessons(
 
 
 @router.patch("/lessons/{lesson_id}", response_model=LessonSummary)
-def admin_patch_lesson(
+async def admin_patch_lesson(
     lesson_id: uuid.UUID, payload: LessonPatch, principal: AdminPrincipal, db: DbSession,
 ) -> dict:
     """Same single-transaction contract as admin_patch_user: flush the change,
@@ -656,12 +697,19 @@ def admin_patch_lesson(
         action="lesson.updated", target_type="lesson", target_id=str(lesson.id),
         payload={"status": lesson.status.value},
     )
+
+    try:
+        await _reembed(lesson)
+    except Exception as exc:  # noqa: BLE001
+        db.rollback()
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "could not update the lesson's embedding; try again") from exc
+
     db.commit()
     return _lesson_row(lesson)
 
 
 @router.delete("/lessons/{lesson_id}", response_model=LessonDeleteResult)
-def admin_archive_lesson(
+async def admin_archive_lesson(
     lesson_id: uuid.UUID, principal: AdminPrincipal, db: DbSession,
 ) -> dict:
     """DELETE archives; it does not remove the row.
@@ -691,5 +739,12 @@ def admin_archive_lesson(
         action="lesson.archived", target_type="lesson", target_id=str(lesson.id),
         payload={},
     )
+
+    try:
+        await _reembed(lesson)
+    except Exception as exc:  # noqa: BLE001
+        db.rollback()
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "could not update the lesson's embedding; try again") from exc
+
     db.commit()
     return {"id": str(lesson.id), "status": lesson.status.value, "archived": True}

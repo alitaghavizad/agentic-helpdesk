@@ -153,6 +153,12 @@ class RunTrigger(str, enum.Enum):
     REFLECTION = "reflection"
     INGEST_EVAL = "ingest_eval"
     APPROVAL_EXECUTION = "approval_execution"
+    # Added in Phase 9 Task 5: admin_patch_lesson/admin_archive_lesson call
+    # writer.upsert_embedding, whose real backend (McpChromaBackend) wraps
+    # every Chroma call in a tracing span -- span() hard-requires an active
+    # Run, and an admin PATCH/DELETE has no ambient one the way a chat turn,
+    # dossier build, or reflection does. See app/admin/router.py's _reembed.
+    LESSON_EDIT = "lesson_edit"
 
 
 class RunStatus(str, enum.Enum):

@@ -68,3 +68,22 @@ async def test_search_knowledge_handler_wraps_results_as_untrusted(db_session):
     for wrapped in result["results"]:
         assert wrapped.startswith('<untrusted_data source="employees')
         assert wrapped.endswith("</untrusted_data>")
+
+
+async def test_search_lessons_only_queries_active_status(monkeypatch):
+    import app.agent.tools.knowledge as knowledge_module
+
+    captured_where = {}
+
+    class _CapturingBackend:
+        async def query(self, collection, query_text, where, k):
+            captured_where.update(where or {})
+            return {"ids": [], "documents": [], "metadatas": [], "distances": []}
+
+    monkeypatch.setattr(knowledge_module, "get_rag_backend", lambda: _CapturingBackend())
+
+    from app.agent.tools.knowledge import SearchLessonsArgs, search_lessons_handler
+
+    await search_lessons_handler(principal=None, db=None, args=SearchLessonsArgs(query="vpn"))
+
+    assert captured_where == {"status": "active"}

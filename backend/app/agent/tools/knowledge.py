@@ -55,7 +55,7 @@ async def search_knowledge_handler(principal: Principal, db: Session, args: Sear
 async def search_lessons_handler(principal: Principal, db: Session, args: SearchLessonsArgs) -> dict:
     backend = get_rag_backend()
     k = max(1, min(args.k, _MAX_SEARCH_LESSONS_K))
-    result = await backend.query("lessons", args.query, where={}, k=k)
+    result = await backend.query("lessons", args.query, where={"status": "active"}, k=k)
     wrapped_results = [
         wrap_untrusted(f"lessons/{metadata.get('lesson_id', 'unknown')}", doc)
         for doc, metadata in zip(result["documents"], result["metadatas"])
