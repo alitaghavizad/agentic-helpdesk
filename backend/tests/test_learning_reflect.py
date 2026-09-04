@@ -278,15 +278,16 @@ class TestReflect:
         monkeypatch.setattr(writer_module, "get_rag_backend", lambda: _FakeRagBackend())
         monkeypatch.setattr(reflect_module, "_get_client", lambda: _FakeAsyncClient(result=_valid_lesson()))
 
-        await reflect_module.reflect(ticket_id)
+        try:
+            await reflect_module.reflect(ticket_id)
 
-        Session = get_sessionmaker()
-        with Session() as s:
-            lesson = s.query(DbLesson).filter(DbLesson.ticket_id == ticket_id).one_or_none()
-            assert lesson is not None
-            assert lesson.embedded_at is not None
-
-        _cleanup_committed_ticket(ticket_id, conv_id, task_id)
+            Session = get_sessionmaker()
+            with Session() as s:
+                lesson = s.query(DbLesson).filter(DbLesson.ticket_id == ticket_id).one_or_none()
+                assert lesson is not None
+                assert lesson.embedded_at is not None
+        finally:
+            _cleanup_committed_ticket(ticket_id, conv_id, task_id)
 
     async def test_records_nothing_when_should_record_is_false(self, monkeypatch):
         import app.learning.reflect as reflect_module
@@ -297,15 +298,16 @@ class TestReflect:
 
         monkeypatch.setattr(reflect_module, "_get_client", lambda: _FakeAsyncClient(result=_valid_lesson(should_record=False)))
 
-        await reflect_module.reflect(ticket_id)
+        try:
+            await reflect_module.reflect(ticket_id)
 
-        Session = get_sessionmaker()
-        with Session() as s:
-            assert s.query(DbLesson).filter(DbLesson.ticket_id == ticket_id).count() == 0
-            run = s.query(Run).filter(Run.trigger == RunTrigger.REFLECTION, Run.conversation_id == conv_id).order_by(Run.started_at.desc()).first()
-            assert run is not None
-
-        _cleanup_committed_ticket(ticket_id, conv_id, task_id)
+            Session = get_sessionmaker()
+            with Session() as s:
+                assert s.query(DbLesson).filter(DbLesson.ticket_id == ticket_id).count() == 0
+                run = s.query(Run).filter(Run.trigger == RunTrigger.REFLECTION, Run.conversation_id == conv_id).order_by(Run.started_at.desc()).first()
+                assert run is not None
+        finally:
+            _cleanup_committed_ticket(ticket_id, conv_id, task_id)
 
     async def test_a_failed_reflection_never_raises(self, monkeypatch):
         import app.learning.reflect as reflect_module

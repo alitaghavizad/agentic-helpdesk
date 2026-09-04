@@ -47,14 +47,25 @@ def _make_lesson(db_session, **overrides):
 
 
 def test_patch_reembeds_with_the_new_content(client, db_session, monkeypatch):
+    """Mocks at the RAG-backend level, one layer below writer.upsert_embedding
+    itself, rather than replacing upsert_embedding wholesale -- that lets the
+    real upsert_embedding run, including the Run it must guarantee is active
+    before the (real or fake) backend's upsert() is ever called. Mocking
+    upsert_embedding directly would bypass that guarantee entirely and could
+    never catch its regression (see the get_current_run assertion below,
+    and the identical rationale on test_learning_writer.py's
+    _FakeRagBackend.upsert)."""
     import app.admin.router as admin_router_module
+    from app.tracing.spans import get_current_run
 
     calls = []
 
-    async def _fake_upsert(lesson_row):
-        calls.append(lesson_row.content_md)
+    class _FakeBackend:
+        async def upsert(self, collection, ids, documents, metadatas):
+            assert get_current_run() is not None, "upsert() called with no active Run"
+            calls.append(documents[0])
 
-    monkeypatch.setattr(admin_router_module.writer, "upsert_embedding", _fake_upsert)
+    monkeypatch.setattr(admin_router_module.writer, "get_rag_backend", lambda: _FakeBackend())
 
     headers = _login_admin(client, db_session)
     lesson = _make_lesson(db_session)
@@ -67,13 +78,16 @@ def test_patch_reembeds_with_the_new_content(client, db_session, monkeypatch):
 
 def test_archive_reembeds_with_archived_status(client, db_session, monkeypatch):
     import app.admin.router as admin_router_module
+    from app.tracing.spans import get_current_run
 
     calls = []
 
-    async def _fake_upsert(lesson_row):
-        calls.append(lesson_row.status.value)
+    class _FakeBackend:
+        async def upsert(self, collection, ids, documents, metadatas):
+            assert get_current_run() is not None, "upsert() called with no active Run"
+            calls.append(metadatas[0]["status"])
 
-    monkeypatch.setattr(admin_router_module.writer, "upsert_embedding", _fake_upsert)
+    monkeypatch.setattr(admin_router_module.writer, "get_rag_backend", lambda: _FakeBackend())
 
     headers = _login_admin(client, db_session)
     lesson = _make_lesson(db_session)
@@ -87,10 +101,11 @@ def test_archive_reembeds_with_archived_status(client, db_session, monkeypatch):
 def test_patch_rolls_back_and_returns_503_when_the_embed_fails(client, db_session, monkeypatch):
     import app.admin.router as admin_router_module
 
-    async def _failing_upsert(lesson_row):
-        raise RuntimeError("chroma unreachable")
+    class _FailingBackend:
+        async def upsert(self, collection, ids, documents, metadatas):
+            raise RuntimeError("chroma unreachable")
 
-    monkeypatch.setattr(admin_router_module.writer, "upsert_embedding", _failing_upsert)
+    monkeypatch.setattr(admin_router_module.writer, "get_rag_backend", lambda: _FailingBackend())
 
     headers = _login_admin(client, db_session)
     lesson = _make_lesson(db_session, content_md="original body")
@@ -103,3 +118,77 @@ def test_patch_rolls_back_and_returns_503_when_the_embed_fails(client, db_sessio
     db_session.expire_all()
     stored = db_session.query(Lesson).filter(Lesson.id == lesson_id).one()
     assert stored.content_md == "original body"
+
+
+def test_archive_rolls_back_and_returns_503_when_the_embed_fails(client, db_session, monkeypatch):
+    """Mirrors test_patch_rolls_back_and_returns_503_when_the_embed_fails for
+    the DELETE (archive) endpoint -- deleting admin_archive_lesson's
+    db.rollback() call left all existing tests passing (nothing asserted the
+    lesson's status was left untouched on a failed embed), so this pins that
+    invariant directly."""
+    import app.admin.router as admin_router_module
+
+    class _FailingBackend:
+        async def upsert(self, collection, ids, documents, metadatas):
+            raise RuntimeError("chroma unreachable")
+
+    monkeypatch.setattr(admin_router_module.writer, "get_rag_backend", lambda: _FailingBackend())
+
+    headers = _login_admin(client, db_session)
+    lesson = _make_lesson(db_session, status=LessonStatus.ACTIVE)
+    lesson_id = lesson.id
+
+    resp = client.delete(f"/api/admin/lessons/{lesson_id}", headers=headers)
+
+    assert resp.status_code == 503
+
+    db_session.expire_all()
+    stored = db_session.query(Lesson).filter(Lesson.id == lesson_id).one()
+    assert stored.status == LessonStatus.ACTIVE
+
+
+def test_a_failed_embed_leaves_no_run_stuck_in_running(client, db_session, monkeypatch):
+    """The no-leaked-RUNNING-run invariant: upsert_embedding's own Run (there
+    is no ambient one for a standalone admin edit) must be finalized as
+    ERROR, not left RUNNING, when the embed fails. Deleting the error-path
+    _end_run_quietly call (replacing it with a bare `pass`) left every other
+    test passing, since none of them queried the Run row itself -- this
+    test does."""
+    import app.admin.router as admin_router_module
+
+    class _FailingBackend:
+        async def upsert(self, collection, ids, documents, metadatas):
+            raise RuntimeError("chroma unreachable")
+
+    monkeypatch.setattr(admin_router_module.writer, "get_rag_backend", lambda: _FailingBackend())
+
+    headers = _login_admin(client, db_session)
+    lesson = _make_lesson(db_session)
+
+    before_max_started_at = (
+        db_session.query(Run.started_at).filter(Run.trigger == RunTrigger.LESSON_EDIT)
+        .order_by(Run.started_at.desc()).first()
+    )
+
+    resp = client.patch(f"/api/admin/lessons/{lesson.id}", json={"content_md": "x"}, headers=headers)
+    assert resp.status_code == 503
+
+    # upsert_embedding commits its Run through its own connection
+    # (get_sessionmaker()), separate from this test's db_session savepoint,
+    # so it must be queried through a fresh connection to see it -- the same
+    # cross-connection-visibility reasoning documented on cleanup_run in
+    # tests/conftest.py.
+    from app.db.session import get_sessionmaker
+
+    Session = get_sessionmaker()
+    with Session() as session:
+        query = session.query(Run).filter(Run.trigger == RunTrigger.LESSON_EDIT)
+        if before_max_started_at is not None:
+            query = query.filter(Run.started_at > before_max_started_at[0])
+        run = query.order_by(Run.started_at.desc()).first()
+        assert run is not None, "expected upsert_embedding to have started its own Run"
+        assert run.status == RunStatus.ERROR
+        # Clean up: this Run was committed on its own connection, so it is
+        # not covered by db_session's rollback at teardown.
+        session.query(Run).filter(Run.id == run.id).delete()
+        session.commit()

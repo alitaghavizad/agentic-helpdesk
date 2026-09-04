@@ -134,6 +134,16 @@ class _FakeRagBackend:
         self.upserts: list[dict] = []
 
     async def upsert(self, collection, ids, documents, metadatas):
+        # Pins the exact invariant the real backend enforces: McpChromaBackend
+        # wraps every Chroma call in a tracing span(), which hard-requires an
+        # active Run. A fake backend with no such requirement is exactly how
+        # this went unnoticed from Task 3 onward -- only a real-backend test
+        # (test_admin_mutations.py's pre-existing lesson PATCH/DELETE tests)
+        # ever exercised the real McpChromaBackend + span() path and caught
+        # it. upsert_embedding is responsible for guaranteeing a Run is
+        # active by the time this runs (see its own docstring).
+        from app.tracing.spans import get_current_run
+        assert get_current_run() is not None, "upsert() called with no active Run"
         self.upserts.append({"collection": collection, "ids": ids, "documents": documents, "metadatas": metadatas})
 
     async def heartbeat(self):
