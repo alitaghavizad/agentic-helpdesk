@@ -317,3 +317,25 @@ class TestReflect:
             await reflect_module.reflect(ticket_id)  # must not raise
         finally:
             _cleanup_committed_ticket(ticket_id, conv_id, task_id)
+
+    async def test_a_failure_before_build_lesson_also_never_raises(self, monkeypatch):
+        """gather_material and _get_client both run unguarded before the
+        first try block in reflect() -- a gap in the brief's own Step 7
+        code, where only build_lesson/create_lesson were wrapped. This
+        reproduces code review's exact mutation (monkeypatching
+        gather_material to raise) to prove the module docstring's "never
+        raises" contract actually holds for every step, not just the two
+        that happened to already be wrapped."""
+        import app.learning.reflect as reflect_module
+
+        ticket_id, conv_id, task_id = _committed_ticket()
+
+        def _boom(db, ticket):
+            raise RuntimeError("gather_material exploded")
+
+        monkeypatch.setattr(reflect_module, "gather_material", _boom)
+
+        try:
+            await reflect_module.reflect(ticket_id)  # must not raise
+        finally:
+            _cleanup_committed_ticket(ticket_id, conv_id, task_id)

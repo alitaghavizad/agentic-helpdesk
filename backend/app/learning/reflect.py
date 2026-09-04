@@ -175,34 +175,41 @@ async def reflect(ticket_id: uuid.UUID) -> None:
     from app.learning import writer
 
     Session = get_sessionmaker()
-    with Session() as db:
-        ticket = db.get(Ticket, ticket_id)
-        if ticket is None:
-            logger.warning("reflect() called for a ticket that no longer exists: %s", ticket_id)
-            return
+    try:
+        with Session() as db:
+            ticket = db.get(Ticket, ticket_id)
+            if ticket is None:
+                logger.warning("reflect() called for a ticket that no longer exists: %s", ticket_id)
+                return
 
-        material = gather_material(db, ticket)
-        client = _get_client()
+            material = gather_material(db, ticket)
+            client = _get_client()
 
-        try:
-            result = await build_lesson(client, material)
-        except ReflectionFailed as exc:
-            logger.warning("reflection failed for ticket TCK-%06d: %s", ticket.ticket_number, exc)
-            return
-        except Exception:  # noqa: BLE001 -- see docstring: this must never propagate
-            logger.exception("reflection raised an unexpected error for ticket TCK-%06d", ticket.ticket_number)
-            return
+            try:
+                result = await build_lesson(client, material)
+            except ReflectionFailed as exc:
+                logger.warning("reflection failed for ticket TCK-%06d: %s", ticket.ticket_number, exc)
+                return
+            except Exception:  # noqa: BLE001 -- see docstring: this must never propagate
+                logger.exception("reflection raised an unexpected error for ticket TCK-%06d", ticket.ticket_number)
+                return
 
-        if not result.lesson.should_record:
-            logger.info("reflection did not record a lesson for ticket TCK-%06d", ticket.ticket_number)
-            return
+            if not result.lesson.should_record:
+                logger.info("reflection did not record a lesson for ticket TCK-%06d", ticket.ticket_number)
+                return
 
-        try:
-            db_lesson = await writer.create_lesson(db, ticket=ticket, lesson=result.lesson, run_id=result.run_id)
-            db.commit()
-        except Exception:  # noqa: BLE001
-            db.rollback()
-            logger.exception("failed to write the lesson for ticket TCK-%06d", ticket.ticket_number)
-            return
+            try:
+                db_lesson = await writer.create_lesson(db, ticket=ticket, lesson=result.lesson, run_id=result.run_id)
+                db.commit()
+            except Exception:  # noqa: BLE001
+                db.rollback()
+                logger.exception("failed to write the lesson for ticket TCK-%06d", ticket.ticket_number)
+                return
 
-        logger.info("recorded lesson %s for ticket TCK-%06d", db_lesson.id, ticket.ticket_number)
+            logger.info("recorded lesson %s for ticket TCK-%06d", db_lesson.id, ticket.ticket_number)
+    except Exception:  # noqa: BLE001 -- see docstring: this must NEVER propagate.
+        # Catches everything the inner try blocks don't: db.get(), gather_material(),
+        # and _get_client() (a misconfigured ANTHROPIC_API_KEY raises here) all run
+        # unguarded above -- a reviewed gap in the original Step 7 code, where only
+        # build_lesson/create_lesson were wrapped.
+        logger.exception("reflect() raised an unexpected error for ticket %s", ticket_id)

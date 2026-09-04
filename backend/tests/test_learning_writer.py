@@ -6,6 +6,8 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
+
 from app.learning.writer import render_markdown, slugify, write_lesson_file
 
 
@@ -212,3 +214,41 @@ class TestCreateLesson:
 
         stored = db_session.query(DbLesson).filter(DbLesson.id == db_lesson.id).one()
         assert stored.content_md == db_lesson.content_md
+
+    async def test_a_failed_embed_leaves_embedded_at_none_and_propagates(self, db_session, make_ticket, monkeypatch, tmp_path):
+        """create_lesson must stamp embedded_at only on a successful embed
+        (module docstring's design D7) -- never fabricate it if upsert_embedding
+        fails. Also asserts the exception itself propagates: the caller
+        (reflect()) relies on this to roll back its own transaction rather
+        than silently committing a lesson row it believes is fully embedded."""
+        from app.db.models import Lesson as DbLesson, Run, RunStatus, RunTrigger
+        from app.learning.reflect import Lesson
+        import app.learning.writer as writer_module
+
+        class _FailingRagBackend:
+            async def upsert(self, collection, ids, documents, metadatas):
+                raise RuntimeError("chroma is down")
+
+            async def heartbeat(self):
+                return True
+
+            async def query(self, collection, query_text, where, k):
+                return {"ids": [], "documents": [], "metadatas": [], "distances": []}
+
+            async def delete(self, collection, ids):
+                pass
+
+        monkeypatch.setattr(writer_module, "KNOWLEDGE_LESSONS_DIR", tmp_path)
+        monkeypatch.setattr(writer_module, "get_rag_backend", lambda: _FailingRagBackend())
+
+        ticket = make_ticket()
+        run = Run(trigger=RunTrigger.REFLECTION, status=RunStatus.OK)
+        db_session.add(run)
+        db_session.flush()
+        lesson = Lesson(**_valid_lesson_kwargs())
+
+        with pytest.raises(RuntimeError, match="chroma is down"):
+            await writer_module.create_lesson(db_session, ticket=ticket, lesson=lesson, run_id=run.id)
+
+        stored = db_session.query(DbLesson).filter(DbLesson.ticket_id == ticket.id).one()
+        assert stored.embedded_at is None
