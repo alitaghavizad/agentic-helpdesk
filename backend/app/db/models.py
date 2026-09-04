@@ -159,6 +159,13 @@ class RunTrigger(str, enum.Enum):
     # Run, and an admin PATCH/DELETE has no ambient one the way a chat turn,
     # dossier build, or reflection does. See app/admin/router.py's _reembed.
     LESSON_EDIT = "lesson_edit"
+    # Added post-phase-10: POST /conversations/{id}/attachments calls
+    # gemini.parse(), whose @span(SpanKind.PARSE, "gemini.parse") decorator
+    # hard-requires an active Run -- an upload happens as its own request,
+    # BEFORE the chat turn it belongs to is ever sent, so it has no ambient
+    # CHAT_TURN run the way a mid-turn call would. Every real upload raised
+    # RuntimeError until this was found and fixed; see app/multimodal/gemini.py.
+    ATTACHMENT_PARSE = "attachment_parse"
 
 
 class RunStatus(str, enum.Enum):

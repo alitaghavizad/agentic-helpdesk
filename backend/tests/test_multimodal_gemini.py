@@ -60,6 +60,37 @@ def test_parse_returns_the_extracted_text_and_model(fake, cleanup_run):
         cleanup_run(handle.run_id)
 
 
+def test_parse_with_no_ambient_run_owns_its_own(fake, cleanup_run):
+    """The real-world shape: POST /conversations/{id}/attachments calls
+    gemini.parse() as its own standalone request, with no chat-turn Run
+    active (the upload happens BEFORE the turn it belongs to is sent).
+    Every other test in this file manually wraps parse() in its own
+    start_run(CHAT_TURN) -- which is exactly how this gap went unnoticed:
+    _traced_parse's @span decorator hard-requires an active Run, and with
+    no ambient one and no chokepoint, this raised RuntimeError on every
+    real upload. Proven by a live curl POST during manual testing before
+    this fix; this test pins it at the unit level, with no ambient run."""
+    result = gemini.parse(b"\x89PNG fake", mime_type="image/png", kind=AttachmentKind.IMAGE)
+    assert result.text == "extracted text"
+
+    run = db_session_query_latest_attachment_parse_run()
+    assert run is not None, "expected parse() to have started its own Run"
+    assert run.status == RunStatus.OK
+    cleanup_run(run.id)
+
+
+def db_session_query_latest_attachment_parse_run():
+    from app.db.models import Run
+    from app.db.session import get_sessionmaker
+
+    Session = get_sessionmaker()
+    with Session() as s:
+        return (
+            s.query(Run).filter(Run.trigger == RunTrigger.ATTACHMENT_PARSE)
+            .order_by(Run.started_at.desc()).first()
+        )
+
+
 def test_parse_uses_the_prompt_for_that_kind(fake, cleanup_run):
     from app.tracing.spans import end_run, start_run
 

@@ -135,7 +135,46 @@ def parse(data: bytes, *, mime_type: str, kind: AttachmentKind) -> ParseResult:
     # know "is this even usable" should not have to open one first.
     if not is_configured():
         raise GeminiUnavailable("GEMINI_API_KEY is not configured")
-    return _traced_parse(data, mime_type=mime_type, kind=kind)
+
+    # _traced_parse's @span decorator hard-requires an active Run.
+    # POST /conversations/{id}/attachments -- the only real caller -- has no
+    # ambient one: an upload is its own request, made BEFORE the chat turn
+    # it belongs to is ever sent, so there is no CHAT_TURN run the way a
+    # mid-turn call would have one. Every real upload raised RuntimeError
+    # here until this was found and fixed (identical shape, and fix, to
+    # app/learning/writer.py's upsert_embedding chokepoint in phase 9): join
+    # an ambient run if one exists (e.g. a future caller running inside a
+    # chat turn), otherwise own a fresh one under ATTACHMENT_PARSE.
+    from app.db.models import RunStatus, RunTrigger
+    from app.tracing.context import get_current_run
+    from app.tracing.spans import start_run
+
+    if get_current_run() is not None:
+        return _traced_parse(data, mime_type=mime_type, kind=kind)
+
+    handle = start_run(RunTrigger.ATTACHMENT_PARSE)
+    try:
+        result = _traced_parse(data, mime_type=mime_type, kind=kind)
+    except Exception as exc:  # noqa: BLE001
+        _end_run_quietly(handle, status=RunStatus.ERROR, error=f"{type(exc).__name__}: {exc}")
+        raise
+    else:
+        _end_run_quietly(handle, status=RunStatus.OK)
+        return result
+
+
+def _end_run_quietly(handle, *, status, error: str | None = None) -> None:
+    """Same rationale as writer.upsert_embedding's identically-named
+    helper: tracing is observability, not the product, and a failure
+    finalizing the Run must never turn a parse that already succeeded --
+    or already failed for its own, already-reported reason -- into a
+    second, different failure."""
+    from app.tracing.spans import end_run as _end_run
+
+    try:
+        _end_run(handle, status=status, error=error)
+    except Exception:  # noqa: BLE001
+        logger.exception("failed to finalize attachment-parse run %s; it stays RUNNING", handle.run_id)
 
 
 @span(SpanKind.PARSE, "gemini.parse")
