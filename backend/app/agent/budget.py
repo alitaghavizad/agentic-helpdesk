@@ -66,7 +66,9 @@ def _hour_bucket(now: datetime) -> datetime:
     return now.replace(minute=0, second=0, microsecond=0)
 
 
-def check_and_record_usage(user_key: str, *, tokens: int, cost: Decimal) -> None:
+def check_and_record_usage(
+    user_key: str, *, input_tokens: int, output_tokens: int, cost: Decimal
+) -> None:
     """Enforces spec 12.3's per-user caps (30 requests/hour, 200k tokens/day)
     and records this call's usage. Uses UsageCounter's existing
     (user_key, window_start) schema with an HOURLY window_start for every
@@ -74,11 +76,21 @@ def check_and_record_usage(user_key: str, *, tokens: int, cost: Decimal) -> None
     computed by summing every row for this user_key in the last 24h rather
     than adding a new column. Raises AbortRun *before* recording if either
     cap would be breached by this call, so a rejected call doesn't count
-    against the user's own budget."""
+    against the user's own budget.
+
+    Input and output tokens are taken separately and stored in their own
+    columns. An earlier version took a single pre-summed `tokens` and added
+    the whole of it to `input_tokens`, leaving `output_tokens` at 0 for
+    every row ever written. The caps themselves still came out right --
+    the daily one sums both columns, and one of them was carrying the
+    total -- which is exactly why it went unnoticed: nothing was visibly
+    wrong until someone read the split, at which point every row in the
+    table claimed the model had produced no output at all."""
     Session = get_sessionmaker()
     now = datetime.now(timezone.utc)
     bucket = _hour_bucket(now)
     day_ago = now - timedelta(hours=24)
+    tokens = input_tokens + output_tokens
 
     with Session() as session:
         current_hour = session.get(UsageCounter, (user_key, bucket))
@@ -101,6 +113,7 @@ def check_and_record_usage(user_key: str, *, tokens: int, cost: Decimal) -> None
             )
             session.add(current_hour)
         current_hour.requests += 1
-        current_hour.input_tokens += tokens
+        current_hour.input_tokens += input_tokens
+        current_hour.output_tokens += output_tokens
         current_hour.cost_usd += cost
         session.commit()

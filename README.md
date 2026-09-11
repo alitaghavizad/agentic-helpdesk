@@ -1,8 +1,25 @@
 # Ticketing (Agentic Helpdesk)
 
-Python/FastAPI backend for an agentic IT helpdesk. See
-`docs/superpowers/specs/2026-08-24-agentic-helpdesk-design.md` for the full
-design.
+Python/FastAPI backend and a React admin/chat frontend for an agentic IT
+helpdesk. See `docs/superpowers/specs/2026-08-24-agentic-helpdesk-design.md`
+for the full design.
+
+## Screenshots
+
+Employees and guests chat with an agent that answers from Northstar's own
+documentation, files tickets, and routes them to the specialist whose skills
+actually match. Administrators get the whole story behind every answer.
+
+| | |
+| --- | --- |
+| ![Sign-in](docs/screenshots/login.png) | ![Admin overview](docs/screenshots/admin-overview.png) |
+| **Sign in** — staff credentials or a throwaway guest session. | **Overview** — today's runs, spend, approval backlog and error rate, with a live run feed. |
+| ![Chat](docs/screenshots/chat.png) | ![Trace waterfall](docs/screenshots/traces.png) |
+| **Chat** — streaming answers, the tools the agent reached for, and a link to the trace behind each one. | **Traces** — every run's span waterfall, with the redacted input and output of each step, its tokens and its cost. |
+| ![Tickets](docs/screenshots/tickets.png) | ![Approvals](docs/screenshots/approvals.png) |
+| **Tickets** — status, priority, assignee and the routing score that picked them. | **Approvals** — privileged actions the agent proposed, held until a human signs off. |
+
+Every screen ships in both themes; the shots above alternate light and dark.
 
 ## Local environment
 

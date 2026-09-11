@@ -85,9 +85,7 @@ function DecisionModal({
           type="button"
           disabled={submitting}
           onClick={() => onConfirm(note.trim())}
-          className={`rounded px-3 py-1.5 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50 ${
-            approve ? "bg-tone-success-fg" : "bg-tone-danger-fg"
-          }`}
+          className={approve ? "btn-success" : "btn-danger"}
         >
           {submitting ? (approve ? "Approving…" : "Denying…") : `Confirm ${verb.toLowerCase()}`}
         </button>
@@ -212,7 +210,7 @@ function ApprovalCard({ approval }: { approval: ApprovalResponse }) {
               type="button"
               disabled={decideMutation.isPending}
               onClick={() => setDecisionOpen("approve")}
-              className="rounded bg-tone-success-fg px-3 py-1.5 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
+              className="btn-success"
             >
               Approve
             </button>
@@ -220,7 +218,7 @@ function ApprovalCard({ approval }: { approval: ApprovalResponse }) {
               type="button"
               disabled={decideMutation.isPending}
               onClick={() => setDecisionOpen("deny")}
-              className="rounded bg-tone-danger-fg px-3 py-1.5 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
+              className="btn-danger"
             >
               Deny
             </button>

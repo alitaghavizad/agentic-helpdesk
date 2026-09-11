@@ -38,13 +38,19 @@ const STATUS_LABEL: Record<TicketStatus, string> = {
  */
 function RoutingDecision({ ticket }: { ticket: TicketSummary }) {
   return (
-    <dl className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5 text-xs text-ink-2">
-      <dt className="font-medium text-ink-3">Specialization</dt>
-      <dd>{ticket.matched_specialization}</dd>
-      <dt className="font-medium text-ink-3">Rationale</dt>
-      <dd>{ticket.assignment_rationale}</dd>
-      <dt className="font-medium text-ink-3">Score</dt>
-      <dd>{score(ticket.assignment_score)}</dd>
+    <dl className="space-y-2 border-t border-line pt-2.5 text-xs">
+      <div>
+        <dt className="eyebrow">Specialization</dt>
+        <dd className="mt-0.5 text-ink-2">{ticket.matched_specialization}</dd>
+      </div>
+      <div>
+        <dt className="eyebrow">Rationale</dt>
+        <dd className="mt-0.5 text-ink-2">{ticket.assignment_rationale}</dd>
+      </div>
+      <div className="flex items-baseline gap-2">
+        <dt className="eyebrow">Score</dt>
+        <dd className="font-medium text-ink tabular-nums">{score(ticket.assignment_score)}</dd>
+      </div>
     </dl>
   );
 }
@@ -152,13 +158,16 @@ export function Tickets() {
       ) : rows.length === 0 ? (
         <StateBlock status="empty" emptyLabel="No tickets to show." />
       ) : (
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+        <div className="-mx-1 flex snap-x gap-4 overflow-x-auto px-1 pb-2">
           {STATUSES.map((status) => {
             const columnRows = rows.filter((row) => row.status === status);
             return (
-              <div key={status} className="space-y-2">
-                <h2 className="text-xs font-semibold uppercase tracking-wide text-ink-3">
-                  {STATUS_LABEL[status]} ({columnRows.length})
+              <div key={status} className="w-72 shrink-0 snap-start space-y-2">
+                <h2 className="flex items-center gap-2 text-xs font-semibold tracking-wider text-ink-3 uppercase">
+                  {STATUS_LABEL[status]}{" "}
+                  <span className="rounded-full bg-surface-2 px-1.5 py-0.5 text-[11px] font-medium text-ink-2 tabular-nums">
+                    {columnRows.length}
+                  </span>
                 </h2>
                 <div className="space-y-2">
                   {columnRows.length === 0 ? (

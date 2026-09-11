@@ -236,3 +236,41 @@ async def test_run_turn_raises_nothing_and_emits_error_event_when_agent_disabled
     assert "disabled" in events[0].data["message"].lower()
     assert client.calls == []  # never called the model at all
     _cleanup_conversation(conv.id)
+
+
+async def test_run_turn_ends_quietly_when_the_consumer_stops_listening(db_session, cleanup_run):
+    """A browser closing an SSE tab mid-turn stops iterating this generator,
+    which throws GeneratorExit in at whatever `yield` it is suspended on.
+
+    Regression test. `run_turn` used to emit its `done` frame from a
+    `finally:` block and catch GeneratorExit in a bare `except BaseException`
+    that then yielded an error frame -- both are yields into a generator that
+    is already closing, which Python answers with `RuntimeError: async
+    generator ignored GeneratorExit`. Every disconnect raised, and the run
+    was left finalized as ERROR with an empty message, so the admin run list
+    reported a failure for what was really just a closed tab.
+    """
+    conv = _conversation(db_session)
+    client = FakeAnthropicClient([make_text_message(text="Here is your answer.")])
+
+    turn = run_turn(
+        client, db_session, _EMPLOYEE, conversation_id=conv.id,
+        user_key=_EMPLOYEE.user_id, history=[], user_message="hello",
+    )
+    first = await turn.__anext__()
+    assert first.type == "token"
+
+    await turn.aclose()  # used to raise RuntimeError
+
+    from app.db.models import Run, RunStatus
+    from app.db.session import get_sessionmaker
+
+    Session = get_sessionmaker()
+    with Session() as session:
+        runs = session.query(Run).filter(Run.conversation_id == conv.id).all()
+        assert [r.status for r in runs] == [RunStatus.ABORTED]
+        assert "disconnected" in (runs[0].error or "")
+        run_id = runs[0].id
+
+    cleanup_run(run_id)
+    _cleanup_conversation(conv.id)

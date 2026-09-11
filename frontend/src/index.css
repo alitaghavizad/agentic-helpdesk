@@ -250,8 +250,18 @@
   @apply btn text-ink-2 hover:not-disabled:bg-surface-2 hover:not-disabled:text-ink;
 }
 
+/* Solid tone buttons. The label is `text-canvas`, never `text-white`:
+   `--tone-*-fg` is a dark ink in light mode and a LIGHT one in dark mode
+   (it is designed to sit on the matching `-bg` tint), so white text on it
+   is green-on-green the moment the theme flips. `--canvas` inverts with
+   the theme in step with it, and stays readable in both. */
 @utility btn-danger {
-  @apply btn bg-tone-danger-fg text-white shadow-ambient
+  @apply btn bg-tone-danger-fg text-canvas shadow-ambient
+    hover:not-disabled:brightness-110 active:not-disabled:translate-y-px;
+}
+
+@utility btn-success {
+  @apply btn bg-tone-success-fg text-canvas shadow-ambient
     hover:not-disabled:brightness-110 active:not-disabled:translate-y-px;
 }
 
