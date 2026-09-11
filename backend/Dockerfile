@@ -53,7 +53,10 @@ COPY scripts /srv/scripts
 COPY corporate_rag_dataset /srv/corporate_rag_dataset
 
 COPY backend/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
-RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+# .gitattributes keeps it LF, but a clone checked out before that landed
+# (or a zip download) can still carry CRLF, which breaks the shebang.
+RUN sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh \
+    && chmod +x /usr/local/bin/docker-entrypoint.sh
 
 # BACKEND_HOST defaults to 127.0.0.1, which is right on a laptop and wrong
 # in a container: bound to its own loopback, nothing reaches the published

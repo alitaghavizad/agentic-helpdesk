@@ -1,0 +1,4 @@
+# Shell scripts run inside Linux containers, where a CRLF shebang reads as
+# `bash\r` and the container dies on start. Git for Windows ships with
+# core.autocrlf=true, so without this they are checked out with CRLF.
+*.sh text eol=lf
