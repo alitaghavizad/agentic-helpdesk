@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import * as admin from "../../api/endpoints/admin";
 import type { AuditEntry } from "../../api/endpoints/admin";
 import { StateBlock, describeError } from "../../components/StateBlock";
+import { PageHeader } from "../../components/PageHeader";
 import { Table } from "../../components/Table";
 import type { Column } from "../../components/Table";
 import { JsonBlock } from "../../components/JsonBlock";
@@ -89,57 +90,60 @@ export function Audit() {
 
   return (
     <div className="space-y-4">
-      <h1 className="text-lg font-semibold text-slate-900">Audit log</h1>
+      <PageHeader
+        title="Audit log"
+        description="Every privileged action recorded, with the actor and payload behind it."
+      />
 
       <div className="flex flex-wrap items-end gap-3">
-        <label className="flex flex-col text-xs text-slate-600">
+        <label className="flex flex-col text-xs text-ink-2">
           Actor ID
           <input
             type="text"
             aria-label="Filter by actor"
             value={filters.actorId}
             onChange={(event) => updateFilter("actorId", event.target.value)}
-            className="rounded border border-slate-300 px-2 py-1 text-sm"
+            className="field-compact"
           />
         </label>
-        <label className="flex flex-col text-xs text-slate-600">
+        <label className="flex flex-col text-xs text-ink-2">
           Action
           <input
             type="text"
             aria-label="Filter by action"
             value={filters.action}
             onChange={(event) => updateFilter("action", event.target.value)}
-            className="rounded border border-slate-300 px-2 py-1 text-sm"
+            className="field-compact"
           />
         </label>
-        <label className="flex flex-col text-xs text-slate-600">
+        <label className="flex flex-col text-xs text-ink-2">
           Target type
           <input
             type="text"
             aria-label="Filter by target type"
             value={filters.targetType}
             onChange={(event) => updateFilter("targetType", event.target.value)}
-            className="rounded border border-slate-300 px-2 py-1 text-sm"
+            className="field-compact"
           />
         </label>
-        <label className="flex flex-col text-xs text-slate-600">
+        <label className="flex flex-col text-xs text-ink-2">
           Since
           <input
             type="date"
             aria-label="Filter by since date"
             value={filters.since}
             onChange={(event) => updateFilter("since", event.target.value)}
-            className="rounded border border-slate-300 px-2 py-1 text-sm"
+            className="field-compact"
           />
         </label>
-        <label className="flex flex-col text-xs text-slate-600">
+        <label className="flex flex-col text-xs text-ink-2">
           Until
           <input
             type="date"
             aria-label="Filter by until date"
             value={filters.until}
             onChange={(event) => updateFilter("until", event.target.value)}
-            className="rounded border border-slate-300 px-2 py-1 text-sm"
+            className="field-compact"
           />
         </label>
       </div>

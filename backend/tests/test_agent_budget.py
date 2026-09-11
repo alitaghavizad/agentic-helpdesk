@@ -69,8 +69,8 @@ def test_agent_enabled_reflects_settings():
 def test_check_and_record_usage_allows_under_the_cap(cleanup_usage_counter):
     user_key = "test-user-budget-1"
     try:
-        check_and_record_usage(user_key, tokens=1000, cost=Decimal("0.01"))
-        check_and_record_usage(user_key, tokens=1000, cost=Decimal("0.01"))
+        check_and_record_usage(user_key, input_tokens=800, output_tokens=200, cost=Decimal("0.01"))
+        check_and_record_usage(user_key, input_tokens=800, output_tokens=200, cost=Decimal("0.01"))
     finally:
         cleanup_usage_counter(user_key)
 
@@ -79,9 +79,9 @@ def test_check_and_record_usage_raises_over_hourly_request_cap(cleanup_usage_cou
     user_key = "test-user-budget-2"
     try:
         for _ in range(30):
-            check_and_record_usage(user_key, tokens=10, cost=Decimal("0.001"))
+            check_and_record_usage(user_key, input_tokens=8, output_tokens=2, cost=Decimal("0.001"))
         with pytest.raises(AbortRun, match="30 requests"):
-            check_and_record_usage(user_key, tokens=10, cost=Decimal("0.001"))
+            check_and_record_usage(user_key, input_tokens=8, output_tokens=2, cost=Decimal("0.001"))
     finally:
         cleanup_usage_counter(user_key)
 
@@ -89,9 +89,9 @@ def test_check_and_record_usage_raises_over_hourly_request_cap(cleanup_usage_cou
 def test_check_and_record_usage_raises_over_daily_token_cap(cleanup_usage_counter):
     user_key = "test-user-budget-3"
     try:
-        check_and_record_usage(user_key, tokens=200_000, cost=Decimal("1"))
+        check_and_record_usage(user_key, input_tokens=160_000, output_tokens=40_000, cost=Decimal("1"))
         with pytest.raises(AbortRun, match="200000 tokens"):
-            check_and_record_usage(user_key, tokens=1, cost=Decimal("0.001"))
+            check_and_record_usage(user_key, input_tokens=1, output_tokens=0, cost=Decimal("0.001"))
     finally:
         cleanup_usage_counter(user_key)
 
@@ -117,6 +117,29 @@ def test_check_and_record_usage_daily_cap_sums_across_hourly_buckets(cleanup_usa
             session.commit()
 
         with pytest.raises(AbortRun, match="200000 tokens"):
-            check_and_record_usage(user_key, tokens=50_001, cost=Decimal("0.001"))
+            check_and_record_usage(user_key, input_tokens=50_000, output_tokens=1, cost=Decimal("0.001"))
+    finally:
+        cleanup_usage_counter(user_key)
+
+
+def test_check_and_record_usage_stores_input_and_output_separately(cleanup_usage_counter):
+    """Regression test. This used to take one pre-summed `tokens` argument
+    and add all of it to `input_tokens`, so `output_tokens` was 0 on every
+    row the system had ever written. Both caps still behaved correctly --
+    the daily one sums the two columns -- which is why nothing failed; the
+    stored breakdown was simply a lie about what the model produced."""
+    user_key = "test-user-budget-split"
+    try:
+        check_and_record_usage(user_key, input_tokens=700, output_tokens=300, cost=Decimal("0.02"))
+        check_and_record_usage(user_key, input_tokens=100, output_tokens=50, cost=Decimal("0.01"))
+
+        Session = get_sessionmaker()
+        with Session() as session:
+            rows = session.query(UsageCounter).filter(UsageCounter.user_key == user_key).all()
+            assert len(rows) == 1
+            assert rows[0].requests == 2
+            assert rows[0].input_tokens == 800
+            assert rows[0].output_tokens == 350
+            assert rows[0].cost_usd == Decimal("0.030000")
     finally:
         cleanup_usage_counter(user_key)

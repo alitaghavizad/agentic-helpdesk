@@ -5,6 +5,7 @@ import * as admin from "../../api/endpoints/admin";
 import type { RunSummary } from "../../api/endpoints/admin";
 import { useRunStream } from "../../hooks/useRunStream";
 import { StateBlock, describeError } from "../../components/StateBlock";
+import { PageHeader } from "../../components/PageHeader";
 import { Table } from "../../components/Table";
 import type { Column } from "../../components/Table";
 import { Badge } from "../../components/Badge";
@@ -52,7 +53,7 @@ function RunRow({
       type="button"
       onClick={() => onSelect(run.id)}
       aria-current={selected}
-      className={`rounded px-1.5 py-0.5 font-mono text-xs underline ${selected ? "text-slate-900" : "text-blue-700"}`}
+      className={`rounded px-1.5 py-0.5 font-mono text-xs whitespace-nowrap underline decoration-dotted underline-offset-2 transition hover:bg-surface-2 ${selected ? "font-medium text-ink" : "text-brand-ink"}`}
     >
       {run.id}
     </button>
@@ -130,7 +131,7 @@ export function Traces() {
               scanning for trouble should not have to open every row's
               trace just to learn there was a failure at all. */}
           {row.status === "error" && row.error && (
-            <p className="mt-1 max-w-xs text-red-700">{row.error}</p>
+            <p className="mt-1 max-w-xs text-tone-danger-fg">{row.error}</p>
           )}
         </div>
       ),
@@ -144,15 +145,17 @@ export function Traces() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-lg font-semibold text-slate-900">Traces</h1>
-        <span
-          role="status"
-          className={`text-xs font-medium ${connected ? "text-emerald-600" : "text-amber-600"}`}
-        >
-          {connected ? "Live" : "Reconnecting…"}
-        </span>
-      </div>
+      <PageHeader
+        title="Traces"
+        description="Every agent run, its span waterfall, token usage and cost."
+        actions={
+          <span role="status">
+            <Badge tone={connected ? "success" : "warning"} dot pulse={connected}>
+              {connected ? "Live" : "Reconnecting…"}
+            </Badge>
+          </span>
+        }
+      />
 
       {runsQuery.isLoading ? (
         <StateBlock status="loading" />
@@ -165,8 +168,8 @@ export function Traces() {
       )}
 
       {runId !== undefined && (
-        <section className="rounded border border-slate-200 bg-white p-4">
-          <h2 className="mb-3 text-sm font-semibold text-slate-900">Trace {runId}</h2>
+        <section className="card p-4">
+          <h2 className="mb-3 text-sm font-semibold text-ink">Trace {runId}</h2>
 
           {traceQuery.isLoading ? (
             <StateBlock status="loading" />
@@ -181,7 +184,7 @@ export function Traces() {
                   a silently short waterfall would read as a run that simply
                   stopped there, so this banner has to be impossible to miss. */}
               {traceQuery.data.truncated && (
-                <p className="mb-3 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800">
+                <p className="mb-3 rounded border border-tone-warning-line bg-tone-warning-bg px-3 py-2 text-xs font-medium text-tone-warning-fg">
                   This trace was truncated: only {tokens(traceQuery.data.span_count)} span
                   {traceQuery.data.span_count === 1 ? "" : "s"} of the full run are shown below.
                 </p>
@@ -189,27 +192,27 @@ export function Traces() {
 
               <dl className="mb-4 grid grid-cols-2 gap-3 text-xs sm:grid-cols-4">
                 <div>
-                  <dt className="uppercase tracking-wide text-slate-500">Trigger</dt>
-                  <dd className="text-slate-800">{traceQuery.data.run.trigger}</dd>
+                  <dt className="uppercase tracking-wide text-ink-3">Trigger</dt>
+                  <dd className="text-ink">{traceQuery.data.run.trigger}</dd>
                 </div>
                 <div>
-                  <dt className="uppercase tracking-wide text-slate-500">Status</dt>
+                  <dt className="uppercase tracking-wide text-ink-3">Status</dt>
                   <dd>
                     <Badge tone={RUN_STATUS_TONE[traceQuery.data.run.status] ?? "neutral"}>{traceQuery.data.run.status}</Badge>
                   </dd>
                 </div>
                 <div>
-                  <dt className="uppercase tracking-wide text-slate-500">Duration</dt>
-                  <dd className="text-slate-800">{duration(traceQuery.data.run.duration_ms)}</dd>
+                  <dt className="uppercase tracking-wide text-ink-3">Duration</dt>
+                  <dd className="text-ink">{duration(traceQuery.data.run.duration_ms)}</dd>
                 </div>
                 <div>
-                  <dt className="uppercase tracking-wide text-slate-500">Cost</dt>
-                  <dd className="text-slate-800">{usd(traceQuery.data.run.cost_usd)}</dd>
+                  <dt className="uppercase tracking-wide text-ink-3">Cost</dt>
+                  <dd className="text-ink">{usd(traceQuery.data.run.cost_usd)}</dd>
                 </div>
               </dl>
 
               {traceQuery.data.run.error && (
-                <p role="alert" className="mb-4 rounded border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+                <p role="alert" className="mb-4 rounded border border-tone-danger-line bg-tone-danger-bg px-3 py-2 text-xs text-tone-danger-fg">
                   {traceQuery.data.run.error}
                 </p>
               )}

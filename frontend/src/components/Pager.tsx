@@ -1,3 +1,5 @@
+import { Icon } from "./Icon";
+
 interface PagerProps {
   /** Row count before limit/offset -- `PageResponse.total`. */
   total: number;
@@ -42,7 +44,7 @@ export function Pager({ total, limit, offset, onChange }: PagerProps) {
   const canNext = offset + safeLimit < total;
 
   return (
-    <div className="flex items-center justify-between gap-4 text-sm text-slate-600">
+    <div className="flex items-center justify-between gap-4 text-sm text-ink-2">
       <span>
         Showing {start}–{end} of {total}
       </span>
@@ -52,11 +54,12 @@ export function Pager({ total, limit, offset, onChange }: PagerProps) {
           aria-label="Previous page"
           disabled={!canPrev}
           onClick={() => onChange(Math.max(0, offset - safeLimit))}
-          className="rounded border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+          className="btn-secondary px-2 py-1 text-xs"
         >
+          <Icon name="chevron-left" className="size-3.5" />
           Previous
         </button>
-        <span className="text-xs text-slate-500">
+        <span className="text-xs text-ink-3 tabular-nums">
           Page {currentPage} of {totalPages}
         </span>
         <button
@@ -64,9 +67,10 @@ export function Pager({ total, limit, offset, onChange }: PagerProps) {
           aria-label="Next page"
           disabled={!canNext}
           onClick={() => onChange(offset + safeLimit)}
-          className="rounded border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+          className="btn-secondary px-2 py-1 text-xs"
         >
           Next
+          <Icon name="chevron-right" className="size-3.5" />
         </button>
       </div>
     </div>

@@ -9,9 +9,9 @@
 export function JsonBlock({ label, value }: { label: string; value: unknown }) {
   const text = value === null || value === undefined ? "null" : JSON.stringify(value, null, 2);
   return (
-    <div className="mb-2 rounded border border-slate-200 bg-slate-50 p-2">
-      <p className="mb-1 text-xs font-medium uppercase tracking-wide text-slate-500">{label}</p>
-      <pre className="whitespace-pre-wrap break-words text-xs text-slate-700">{text}</pre>
+    <div className="mb-2 rounded-lg border border-line bg-surface-2 p-2.5">
+      <p className="eyebrow mb-1.5">{label}</p>
+      <pre className="font-mono text-xs leading-relaxed whitespace-pre-wrap break-words text-ink-2">{text}</pre>
     </div>
   );
 }

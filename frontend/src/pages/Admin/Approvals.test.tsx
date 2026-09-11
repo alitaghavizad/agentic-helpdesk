@@ -393,8 +393,8 @@ describe("Approvals", () => {
     expect(screen.queryByText("REQ-1001")).not.toBeInTheDocument();
 
     const calledUrls = fetchMock.mock.calls.map(([url]) => String(url));
-    expect(calledUrls).toContain("http://localhost:8000/api/admin/approvals?status=pending");
-    expect(calledUrls).toContain("http://localhost:8000/api/admin/approvals");
+    expect(calledUrls).toContain("http://localhost:8080/api/admin/approvals?status=pending");
+    expect(calledUrls).toContain("http://localhost:8080/api/admin/approvals");
   });
 
   it("renders a failed approvals fetch as StateBlock's error state, never as an empty list", async () => {

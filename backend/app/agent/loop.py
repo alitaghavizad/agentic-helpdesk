@@ -82,6 +82,7 @@ async def run_turn(
     system_prompt = build_system_prompt(principal)
     tools = to_anthropic_tool_params()
     aborted_reason: str | None = None
+    done_event = TurnEvent("done", {"run_id": str(handle.run_id)})
 
     try:
         await check_inbound(user_message)
@@ -112,7 +113,12 @@ async def run_turn(
                 )
 
             try:
-                check_and_record_usage(user_key, tokens=usage.input_tokens + usage.output_tokens, cost=turn_cost or Decimal("0"))
+                check_and_record_usage(
+                    user_key,
+                    input_tokens=usage.input_tokens,
+                    output_tokens=usage.output_tokens,
+                    cost=turn_cost or Decimal("0"),
+                )
             except AbortRun as exc:
                 aborted_reason = exc.reason
                 yield TurnEvent("error", {"message": f"Turn ended: {exc.reason}."})
@@ -165,9 +171,28 @@ async def run_turn(
             messages.append({"role": "user", "content": results})
 
         end_run(handle, status=RunStatus.ABORTED if aborted_reason else RunStatus.OK, error=aborted_reason)
+    except (GeneratorExit, asyncio.CancelledError):
+        # The consumer went away mid-turn -- an SSE tab closed, or Starlette
+        # cancelled the request task. This branch MUST come before the
+        # BaseException one below and MUST NOT yield: Python forbids an
+        # async generator from yielding while it is being closed, so a
+        # `yield` here raises "async generator ignored GeneratorExit" and
+        # the real reason the turn stopped is lost behind it. `end_run` is
+        # synchronous, so recording the run is safe even here.
+        #
+        # ABORTED, not ERROR: nothing in this turn went wrong, the listener
+        # just stopped listening -- and the run list is read by admins
+        # looking for genuine failures.
+        end_run(handle, status=RunStatus.ABORTED, error="client disconnected before the turn finished")
+        raise
     except BaseException as exc:
         end_run(handle, status=RunStatus.ERROR, error=str(exc))
         yield TurnEvent("error", {"message": "An internal error occurred."})
+        yield done_event
         raise
-    finally:
-        yield TurnEvent("done", {"run_id": str(handle.run_id)})
+
+    # Deliberately NOT in a `finally`. A `finally: yield` fires while the
+    # generator is being closed too, which is the same illegal yield the
+    # cancellation branch above exists to avoid -- and it made every client
+    # disconnect raise instead of ending the turn quietly.
+    yield done_event

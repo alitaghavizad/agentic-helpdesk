@@ -3,15 +3,37 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import * as admin from "../../api/endpoints/admin";
 import { useRunStream } from "../../hooks/useRunStream";
 import { StateBlock, describeError } from "../../components/StateBlock";
+import { PageHeader } from "../../components/PageHeader";
+import { Badge } from "../../components/Badge";
+import { Icon } from "../../components/Icon";
+import type { IconName } from "../../components/Icon";
+import { RUN_STATUS_TONE } from "../../lib/runStatus";
 import { usd } from "../../lib/format";
 
 const OVERVIEW_QUERY_KEY = ["admin", "overview"] as const;
 
-function Counter({ label, value }: { label: string; value: string }) {
+function Counter({
+  label, value, icon, accent,
+}: {
+  label: string;
+  value: string;
+  icon: IconName;
+  accent?: boolean;
+}) {
   return (
-    <div className="rounded border border-slate-200 bg-white p-4">
-      <p className="text-xs font-medium uppercase tracking-wide text-slate-500">{label}</p>
-      <p className="mt-1 text-2xl font-semibold text-slate-900">{value}</p>
+    <div className="card p-4 transition hover:shadow-raised">
+      <div className="flex items-start justify-between gap-3">
+        <p className="text-xs font-medium text-ink-3">{label}</p>
+        <span
+          aria-hidden="true"
+          className={`grid size-7 shrink-0 place-items-center rounded-lg ${
+            accent ? "bg-brand-soft text-brand-ink" : "bg-surface-2 text-ink-3"
+          }`}
+        >
+          <Icon name={icon} className="size-3.5" />
+        </span>
+      </div>
+      <p className="mt-2 text-2xl font-semibold tracking-tight text-ink tabular-nums">{value}</p>
     </div>
   );
 }
@@ -60,41 +82,49 @@ export function Overview() {
   if (!overview) return <StateBlock status="loading" />;
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h1 className="text-lg font-semibold text-slate-900">Overview</h1>
-        <span
-          role="status"
-          className={`text-xs font-medium ${connected ? "text-emerald-600" : "text-amber-600"}`}
-        >
-          {connected ? "Live" : "Reconnecting…"}
-        </span>
-      </div>
+    <div>
+      <PageHeader
+        title="Overview"
+        description="Today's agent activity across runs, spend, approvals and tickets."
+        actions={
+          <span role="status">
+            <Badge tone={connected ? "success" : "warning"} dot pulse={connected}>
+              {connected ? "Live" : "Reconnecting…"}
+            </Badge>
+          </span>
+        }
+      />
 
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
-        <Counter label="Runs today" value={String(overview.runs_today)} />
-        <Counter label="Spend today" value={usd(overview.spend_today)} />
-        <Counter label="Pending approvals" value={String(overview.pending_approvals)} />
-        <Counter label="Open tickets" value={String(overview.open_tickets)} />
+        <Counter label="Runs today" value={String(overview.runs_today)} icon="activity" accent />
+        <Counter label="Spend today" value={usd(overview.spend_today)} icon="coins" />
+        <Counter label="Pending approvals" value={String(overview.pending_approvals)} icon="shield" />
+        <Counter label="Open tickets" value={String(overview.open_tickets)} icon="ticket" />
         <Counter
           label="Error rate, of today's completed runs"
           value={`${(overview.error_rate * 100).toFixed(1)}%`}
+          icon="alert"
         />
       </div>
 
-      <div className="rounded border border-slate-200 bg-white p-4">
-        <h2 className="mb-2 text-sm font-semibold text-slate-900">Live activity</h2>
+      <div className="card mt-4 p-4">
+        <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-ink">
+          <Icon name="activity" className="size-4 text-ink-3" />
+          Live activity
+        </h2>
         {events.length === 0 ? (
-          <p className="text-sm text-slate-500">No run activity yet.</p>
+          <p className="py-6 text-center text-sm text-ink-3">No run activity yet.</p>
         ) : (
-          <ul className="space-y-1 text-sm">
+          <ul className="divide-y divide-line/60 text-sm">
             {events.map((event, index) => (
               <li
                 key={`${event.id}-${events.length - index}`}
-                className="flex items-center justify-between border-b border-slate-100 py-1 text-slate-700 last:border-b-0"
+                className="flex animate-fade items-center justify-between gap-3 py-2"
               >
-                <span className="font-mono text-xs text-slate-500">{event.id}</span>
-                <span>{event.status ?? event.type}</span>
+                <span className="truncate font-mono text-xs text-ink-3">{event.id}</span>
+                <Badge tone={RUN_STATUS_TONE[event.status ?? ""] ?? "neutral"}>
+                  {event.status ?? event.type}
+                </Badge>
               </li>
             ))}
           </ul>

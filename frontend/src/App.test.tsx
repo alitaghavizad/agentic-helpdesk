@@ -286,7 +286,7 @@ describe("App routing", () => {
     } as never);
     fetchMock.mockImplementation(async (url: string) => {
       const u = String(url);
-      if (u.startsWith("http://localhost:8000/api/admin/audit")) {
+      if (u.startsWith("http://localhost:8080/api/admin/audit")) {
         return jsonResponse({ items: [], limit: 50, offset: 0, total: 0 });
       }
       if (u.includes("/stream")) {

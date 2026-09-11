@@ -1,4 +1,5 @@
 import { ApiError } from "../api/client";
+import { Icon, Spinner } from "./Icon";
 
 export type StateBlockStatus = "loading" | "empty" | "error";
 
@@ -18,20 +19,29 @@ interface StateBlockProps {
 export function StateBlock({ status, message, loadingLabel = "Loading…", emptyLabel = "Nothing to show yet." }: StateBlockProps) {
   if (status === "loading") {
     return (
-      <div role="status" className="flex justify-center rounded border border-dashed border-slate-200 p-8 text-sm text-slate-500">
+      <div
+        role="status"
+        className="flex items-center justify-center gap-2.5 rounded-card border border-dashed border-line p-8 text-sm text-ink-3"
+      >
+        <Spinner className="size-4 text-brand" />
         {loadingLabel}
       </div>
     );
   }
   if (status === "error") {
     return (
-      <div role="alert" className="rounded border border-red-200 bg-red-50 p-8 text-center text-sm text-red-700">
+      <div
+        role="alert"
+        className="flex items-center justify-center gap-2.5 rounded-card border border-tone-danger-line bg-tone-danger-bg p-8 text-center text-sm font-medium text-tone-danger-fg"
+      >
+        <Icon name="alert" className="size-4 shrink-0" />
         {message ?? "Something went wrong. Please try again."}
       </div>
     );
   }
   return (
-    <div className="rounded border border-dashed border-slate-200 p-8 text-center text-sm text-slate-500">
+    <div className="flex flex-col items-center justify-center gap-2 rounded-card border border-dashed border-line p-8 text-center text-sm text-ink-3">
+      <Icon name="inbox" className="size-5 text-ink-3/70" />
       {message ?? emptyLabel}
     </div>
   );

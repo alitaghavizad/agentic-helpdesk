@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { useNotifications } from "../hooks/useNotifications";
 import type { Notification } from "../api/endpoints/notifications";
 import { StateBlock } from "./StateBlock";
+import { Icon } from "./Icon";
 
 /**
  * Only a `link_type` this app has a real detail route for gets turned into a
@@ -67,19 +68,19 @@ export function NotificationBell() {
         onClick={() => setOpen((current) => !current)}
         aria-label={unread > 0 ? `Notifications, ${unread} unread` : "Notifications"}
         aria-expanded={open}
-        className="relative rounded p-2 text-slate-600 hover:bg-slate-100"
+        className="relative grid size-8 place-items-center rounded-lg text-ink-3 transition hover:bg-surface-2 hover:text-ink"
       >
-        <span aria-hidden="true" className="text-lg">🔔</span>
+        <Icon name="bell" className="size-4" />
         {unread > 0 && (
-          <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-600 px-1 text-[10px] font-semibold text-white">
+          <span className="absolute -top-0.5 -right-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-tone-danger-fg px-1 text-[10px] font-semibold text-canvas ring-2 ring-surface">
             {unread > 99 ? "99+" : unread}
           </span>
         )}
       </button>
 
       {open && (
-        <div className="absolute right-0 z-10 mt-2 w-80 rounded border border-slate-200 bg-white shadow-lg">
-          <div className="border-b border-slate-200 px-3 py-2 text-sm font-semibold text-slate-900">
+        <div className="absolute right-0 z-10 mt-2 w-80 origin-top-right animate-rise overflow-hidden rounded-card border border-line bg-surface shadow-overlay">
+          <div className="border-b border-line px-3 py-2.5 text-sm font-semibold text-ink">
             Notifications
           </div>
           <div className="max-h-96 overflow-y-auto">
@@ -92,19 +93,19 @@ export function NotificationBell() {
                   const body = (
                     <div className="flex flex-col gap-0.5 px-3 py-2">
                       <div className="flex items-center justify-between gap-2">
-                        <span className={`text-sm ${notification.read ? "font-normal text-slate-600" : "font-semibold text-slate-900"}`}>
+                        <span className={`text-sm ${notification.read ? "font-normal text-ink-2" : "font-semibold text-ink"}`}>
                           {notification.title}
                         </span>
                         {!notification.read && (
-                          <span aria-hidden="true" className="h-2 w-2 shrink-0 rounded-full bg-blue-600" />
+                          <span aria-hidden="true" className="size-2 shrink-0 rounded-full bg-brand" />
                         )}
                       </div>
-                      <p className="text-sm text-slate-600">{notification.body}</p>
-                      <span className="text-xs text-slate-400">{relativeTime(notification.created_at)}</span>
+                      <p className="text-sm text-ink-2">{notification.body}</p>
+                      <span className="text-xs text-ink-3">{relativeTime(notification.created_at)}</span>
                     </div>
                   );
                   return (
-                    <li key={notification.id} className="border-b border-slate-100 last:border-b-0 hover:bg-slate-50">
+                    <li key={notification.id} className="border-b border-line/60 transition-colors last:border-b-0 hover:bg-surface-2">
                       {path ? (
                         <Link to={path} onClick={() => handleSelect(notification)} className="block">
                           {body}

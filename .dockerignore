@@ -1,0 +1,23 @@
+# Keep the build context small and reproducible. The backend image's context
+# is the repo root (it needs corporate_rag_dataset/ and scripts/), so without
+# this every node_modules and .venv would be shipped to the daemon.
+.git
+.github
+**/node_modules
+**/dist
+**/.venv
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/.pytest_tmp
+**/.coverage
+**/htmlcov
+docs
+frontend/openapi.json
+frontend/test-results
+frontend/playwright-report
+storage
+knowledge
+.env
+**/.env
+!**/.env.example

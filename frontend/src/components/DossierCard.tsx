@@ -11,8 +11,8 @@ import { usd, tokens } from "../lib/format";
 function Section({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="space-y-1">
-      <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</h4>
-      <div className="text-sm text-slate-700">{children}</div>
+      <h4 className="text-xs font-semibold uppercase tracking-wide text-ink-3">{label}</h4>
+      <div className="text-sm text-ink-2">{children}</div>
     </div>
   );
 }
@@ -29,7 +29,7 @@ function ListSection({ label, items, empty, render }: {
   return (
     <Section label={label}>
       {items.length === 0 ? (
-        <p className="italic text-slate-400">{empty}</p>
+        <p className="italic text-ink-3">{empty}</p>
       ) : (
         <ul className="list-disc space-y-1 pl-5">
           {items.map((item, index) => (
@@ -75,13 +75,13 @@ export function DossierCard({ dossier }: { dossier: IncidentDossier }) {
   const { requester, recommended_assignee: assignee, cost_summary: cost } = dossier;
 
   return (
-    <div className="space-y-3 rounded border border-slate-300 bg-white p-4" data-testid="dossier-card">
+    <div className="space-y-3 rounded border border-line-strong bg-surface p-4" data-testid="dossier-card">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 className="text-sm font-semibold text-slate-900">Incident dossier — {dossier.ticket_number}</h3>
+        <h3 className="text-sm font-semibold text-ink">Incident dossier — {dossier.ticket_number}</h3>
         <button
           type="button"
           onClick={() => downloadJson(`dossier-${dossier.ticket_number}.json`, dossier)}
-          className="rounded border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
+          className="btn-secondary px-2 py-1 text-xs"
         >
           Download JSON
         </button>
@@ -96,13 +96,13 @@ export function DossierCard({ dossier }: { dossier: IncidentDossier }) {
 
       <Section label="Requester">
         <dl className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5">
-          <dt className="font-medium text-slate-500">Name</dt>
+          <dt className="font-medium text-ink-3">Name</dt>
           <dd>{requester.name}</dd>
-          <dt className="font-medium text-slate-500">Role</dt>
+          <dt className="font-medium text-ink-3">Role</dt>
           <dd>{requester.role}</dd>
-          <dt className="font-medium text-slate-500">Department</dt>
+          <dt className="font-medium text-ink-3">Department</dt>
           <dd>{requester.department ?? "—"}</dd>
-          <dt className="font-medium text-slate-500">Clearance</dt>
+          <dt className="font-medium text-ink-3">Clearance</dt>
           <dd>{requester.clearance ?? "—"}</dd>
         </dl>
       </Section>
@@ -113,7 +113,7 @@ export function DossierCard({ dossier }: { dossier: IncidentDossier }) {
         empty="No timeline entries."
         render={(entry: IncidentDossier["timeline"][number]) => (
           <>
-            <span className="font-mono text-xs text-slate-500">{entry.at}</span> — {entry.what}
+            <span className="font-mono text-xs text-ink-3">{entry.at}</span> — {entry.what}
           </>
         )}
       />
@@ -131,7 +131,7 @@ export function DossierCard({ dossier }: { dossier: IncidentDossier }) {
         empty="No knowledge sources cited."
         render={(source: IncidentDossier["knowledge_sources"][number]) => (
           <>
-            <span className="font-mono text-xs text-slate-500">{source.document_id}</span> — {source.why_it_mattered}
+            <span className="font-mono text-xs text-ink-3">{source.document_id}</span> — {source.why_it_mattered}
           </>
         )}
       />
@@ -151,11 +151,11 @@ export function DossierCard({ dossier }: { dossier: IncidentDossier }) {
 
       <Section label="Recommended assignee">
         <dl className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5">
-          <dt className="font-medium text-slate-500">Helpdesk ref</dt>
+          <dt className="font-medium text-ink-3">Helpdesk ref</dt>
           <dd>{assignee.helpdesk_ref}</dd>
-          <dt className="font-medium text-slate-500">Specialization</dt>
+          <dt className="font-medium text-ink-3">Specialization</dt>
           <dd>{assignee.specialization}</dd>
-          <dt className="font-medium text-slate-500">Rationale</dt>
+          <dt className="font-medium text-ink-3">Rationale</dt>
           <dd>{assignee.rationale}</dd>
         </dl>
       </Section>

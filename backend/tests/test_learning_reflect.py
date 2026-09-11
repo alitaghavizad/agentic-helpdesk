@@ -189,6 +189,43 @@ class TestBuildLesson:
         assert run.status == RunStatus.ERROR
         cleanup_run(run.id)
 
+    async def test_a_malformed_usage_block_still_finalizes_the_run(self, cleanup_run, db_session):
+        """Regression test. Every failure the inner handlers cover ends the
+        run; a failure between them did not.
+
+        `build_lesson` reads `response.usage` and hands it to
+        `recorder.record_usage(...)` AFTER the try/except around the model
+        call, and the only outer clause was `except ReflectionFailed: raise`
+        -- which re-raises exactly what it caught and therefore does nothing
+        at all. A response whose usage block is not the expected shape
+        (or a span insert that fails) escaped with the run never finalized,
+        leaving it RUNNING forever. That is not cosmetic: the admin
+        overview's error rate divides by runs that are NOT running, so each
+        stuck run shrinks the denominator of the health number an operator
+        reads.
+        """
+        from app.db.models import Run
+        from app.learning.reflect import ReflectionFailed, build_lesson
+
+        class _NoUsage(_FakeParsed):
+            def __init__(self, parsed):
+                super().__init__(parsed)
+                self.usage = object()  # no input_tokens -> AttributeError
+
+        client = _FakeAsyncClient(result=_valid_lesson())
+        client.messages.parse = lambda **kwargs: _returns(_NoUsage(_valid_lesson()))
+
+        with pytest.raises(ReflectionFailed, match="AttributeError"):
+            await build_lesson(client, _material())
+
+        run = db_session.query(Run).filter(Run.trigger == RunTrigger.REFLECTION).order_by(Run.started_at.desc()).first()
+        assert run.status == RunStatus.ERROR, "the run was left stuck in RUNNING"
+        cleanup_run(run.id)
+
+
+async def _returns(value):
+    return value
+
 
 class _FakeRagBackend:
     def __init__(self):

@@ -1,5 +1,8 @@
 export function usd(value: number | null | undefined): string {
   if (value === null || value === undefined) return "unpriced";
+  // Exactly zero is not a sub-cent amount that six decimals would rescue --
+  // it is nothing, and "$0.000000" on a headline figure reads as noise.
+  if (value === 0) return "$0.00";
   if (Math.abs(value) >= 1) return `$${value.toFixed(2)}`;
   return `$${value.toFixed(6)}`;
 }

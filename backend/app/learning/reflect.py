@@ -157,7 +157,21 @@ async def build_lesson(client: AsyncAnthropic, material: ReflectionMaterial) -> 
                 cache_write_tokens=usage.cache_creation_input_tokens or 0,
             )
     except ReflectionFailed:
+        # Already finalized by whichever inner handler raised it.
         raise
+    except Exception as exc:  # noqa: BLE001 -- one exit type, see docstring
+        # Everything the inner handlers do NOT cover: `response.usage` or
+        # `recorder.record_usage(...)` raising on a malformed response, and
+        # the span context manager's own __aexit__ failing on its insert.
+        # This clause used to be absent, and `except ReflectionFailed: raise`
+        # alone is a no-op -- it re-raises exactly what it caught -- so any
+        # such failure escaped with the run never finalized, leaving it
+        # RUNNING forever. A stuck RUNNING run is not cosmetic: the admin
+        # overview's error rate is a fraction of runs that are NOT running,
+        # so each one quietly shrinks the denominator of the number an
+        # operator uses to decide whether the agent is healthy.
+        _end_run_quietly(handle, status=RunStatus.ERROR, error=f"{type(exc).__name__}: {exc}")
+        raise ReflectionFailed(f"{type(exc).__name__}: {exc}") from exc
 
     _end_run_quietly(handle, status=RunStatus.OK)
     return LessonWithRun(lesson=parsed, run_id=handle.run_id)

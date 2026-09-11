@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as admin from "../../api/endpoints/admin";
 import type { LessonSummary, LessonsPage } from "../../api/endpoints/admin";
 import { StateBlock, describeError } from "../../components/StateBlock";
+import { PageHeader } from "../../components/PageHeader";
 import { Table } from "../../components/Table";
 import type { Column } from "../../components/Table";
 import { Badge } from "../../components/Badge";
@@ -47,7 +48,7 @@ function EditLessonModal({
 
   return (
     <Modal title={`Edit ${lesson.title}`} onClose={onCancel} restoreFocusFallback={restoreFocusFallback}>
-      <label htmlFor="lesson-content" className="mb-1 block text-xs font-medium text-slate-700">
+      <label htmlFor="lesson-content" className="mb-1 block text-xs font-medium text-ink-2">
         Content
       </label>
       <textarea
@@ -56,22 +57,22 @@ function EditLessonModal({
         value={content}
         onChange={(event) => setContent(event.target.value)}
         rows={8}
-        className="mb-3 w-full rounded border border-slate-300 px-2 py-1 font-mono text-xs"
+        className="mb-3 w-full rounded border border-line-strong px-2 py-1 font-mono text-xs"
       />
       {error && (
-        <p role="alert" className="mb-2 text-xs text-red-700">
+        <p role="alert" className="mb-2 text-xs text-tone-danger-fg">
           {error}
         </p>
       )}
       <div className="flex justify-end gap-2">
-        <button type="button" onClick={onCancel} className="rounded px-3 py-1.5 text-sm text-slate-600">
+        <button type="button" onClick={onCancel} className="rounded px-3 py-1.5 text-sm text-ink-2">
           Cancel
         </button>
         <button
           type="button"
           disabled={submitting}
           onClick={() => onSave(content)}
-          className="rounded bg-slate-900 px-3 py-1.5 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
+          className="rounded btn-primary disabled:cursor-not-allowed disabled:opacity-50"
         >
           {submitting ? "Saving…" : "Save"}
         </button>
@@ -174,7 +175,7 @@ export function Lessons() {
               setEditError(null);
               setEditing(row);
             }}
-            className="rounded border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
+            className="btn-secondary px-2 py-1 text-xs"
           >
             Edit
           </button>
@@ -182,7 +183,7 @@ export function Lessons() {
             type="button"
             disabled={archiveMutation.isPending && archiveMutation.variables === row.id}
             onClick={() => archiveMutation.mutate(row.id)}
-            className="rounded border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+            className="btn-secondary px-2 py-1 text-xs"
           >
             Archive
           </button>
@@ -193,10 +194,13 @@ export function Lessons() {
 
   return (
     <div ref={containerRef} className="space-y-4">
-      <h1 className="text-lg font-semibold text-slate-900">Lessons</h1>
+      <PageHeader
+        title="Lessons"
+        description="What the agent learned from resolved tickets, and what it is allowed to keep."
+      />
 
       {archiveMutation.isError && (
-        <p role="alert" className="text-xs text-red-700">
+        <p role="alert" className="text-xs text-tone-danger-fg">
           {describeError(archiveMutation.error)}
         </p>
       )}

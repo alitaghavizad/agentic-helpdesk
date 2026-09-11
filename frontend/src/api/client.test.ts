@@ -24,7 +24,7 @@ describe("apiFetch", () => {
     fetchMock.mockResolvedValueOnce(jsonResponse({ ok: true }));
     await apiFetch("/api/health");
     const [url, init] = fetchMock.mock.calls[0];
-    expect(url).toBe("http://localhost:8000/api/health");
+    expect(url).toBe("http://localhost:8080/api/health");
     expect(new Headers(init.headers).get("authorization")).toBe("Bearer token-1");
     expect(init.credentials).toBe("include");
   });

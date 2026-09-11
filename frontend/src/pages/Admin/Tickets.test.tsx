@@ -115,12 +115,15 @@ describe("Admin Tickets board", () => {
     renderBoard();
 
     // All six status columns are present, not just the ones with tickets.
-    expect(await screen.findByText(/^Open \(1\)$/)).toBeInTheDocument();
-    expect(screen.getByText(/^Assigned \(0\)$/)).toBeInTheDocument();
-    expect(screen.getByText(/^In progress \(0\)$/)).toBeInTheDocument();
-    expect(screen.getByText(/^Resolved \(1\)$/)).toBeInTheDocument();
-    expect(screen.getByText(/^Closed \(0\)$/)).toBeInTheDocument();
-    expect(screen.getByText(/^Escalated \(1\)$/)).toBeInTheDocument();
+    // Matched on the heading's accessible name rather than a single text
+    // node: the count renders as its own badge beside the label, so the
+    // name is "Open 1", not "Open (1)".
+    expect(await screen.findByRole("heading", { name: "Open 1" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Assigned 0" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "In progress 0" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Resolved 1" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Closed 0" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Escalated 1" })).toBeInTheDocument();
 
     // Each ticket appears once, under its own status.
     expect(screen.getByText("Cannot log in to the billing portal")).toBeInTheDocument();

@@ -3,7 +3,12 @@
  * context pushes the token in through setAccessToken, so this can be tested
  * without rendering anything.
  */
-const BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8000";
+// Falls back to the backend's own documented default (repo-root .env's
+// BACKEND_PORT, 8080) -- NOT 8000, which is Chroma. frontend/.env is
+// gitignored, so this fallback is what a fresh clone actually runs on,
+// and pointing it at the vector database fails every request in a way
+// that looks like the backend is down.
+const BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8080";
 const REFRESH_PATH = "/api/auth/refresh";
 
 export class ApiError extends Error {

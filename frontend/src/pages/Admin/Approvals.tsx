@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as admin from "../../api/endpoints/admin";
 import type { ApprovalResponse } from "../../api/endpoints/admin";
 import { StateBlock, describeError } from "../../components/StateBlock";
+import { PageHeader } from "../../components/PageHeader";
 import { Badge } from "../../components/Badge";
 import type { BadgeTone } from "../../components/Badge";
 import { Modal } from "../../components/Modal";
@@ -60,7 +61,7 @@ function DecisionModal({
 
   return (
     <Modal title={`${verb} ${requestNumber}`} onClose={onCancel} restoreFocusFallback={restoreFocusFallback}>
-      <label htmlFor="decision-note" className="mb-1 block text-xs font-medium text-slate-700">
+      <label htmlFor="decision-note" className="mb-1 block text-xs font-medium text-ink-2">
         Note (optional)
       </label>
       <textarea
@@ -69,24 +70,22 @@ function DecisionModal({
         value={note}
         onChange={(event) => setNote(event.target.value)}
         rows={3}
-        className="mb-3 w-full rounded border border-slate-300 px-2 py-1 text-sm"
+        className="mb-3 w-full rounded border border-line-strong px-2 py-1 text-sm"
       />
       {error && (
-        <p role="alert" className="mb-2 text-xs text-red-700">
+        <p role="alert" className="mb-2 text-xs text-tone-danger-fg">
           {error}
         </p>
       )}
       <div className="flex justify-end gap-2">
-        <button type="button" onClick={onCancel} className="rounded px-3 py-1.5 text-sm text-slate-600">
+        <button type="button" onClick={onCancel} className="rounded px-3 py-1.5 text-sm text-ink-2">
           Cancel
         </button>
         <button
           type="button"
           disabled={submitting}
           onClick={() => onConfirm(note.trim())}
-          className={`rounded px-3 py-1.5 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50 ${
-            approve ? "bg-emerald-700" : "bg-red-700"
-          }`}
+          className={approve ? "btn-success" : "btn-danger"}
         >
           {submitting ? (approve ? "Approving…" : "Denying…") : `Confirm ${verb.toLowerCase()}`}
         </button>
@@ -167,18 +166,18 @@ function ApprovalCard({ approval }: { approval: ApprovalResponse }) {
   }, [isPending]);
 
   return (
-    <div ref={cardRef} tabIndex={-1} className="space-y-3 rounded border border-slate-200 bg-white p-4">
+    <div ref={cardRef} tabIndex={-1} className="card space-y-3 p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex flex-wrap items-center gap-2">
-          <span className="font-mono text-sm text-slate-500">{approval.request_number}</span>
-          <span className="text-sm font-medium text-slate-900">{approval.action_type}</span>
+          <span className="font-mono text-sm text-ink-3">{approval.request_number}</span>
+          <span className="text-sm font-medium text-ink">{approval.action_type}</span>
           <Badge tone={RISK_TONE[approval.risk_level] ?? "neutral"}>{approval.risk_level} risk</Badge>
         </div>
         <Badge tone={STATUS_TONE[approval.status] ?? "neutral"}>{approval.status}</Badge>
       </div>
 
-      <p className="text-sm text-slate-700">{approval.justification}</p>
-      <p className="text-sm italic text-slate-500">{approval.agent_summary}</p>
+      <p className="text-sm text-ink-2">{approval.justification}</p>
+      <p className="text-sm italic text-ink-3">{approval.agent_summary}</p>
 
       <JsonBlock label="Action payload" value={approval.action_payload} />
 
@@ -195,14 +194,14 @@ function ApprovalCard({ approval }: { approval: ApprovalResponse }) {
        * always resolves; it just does not deep-select, because the screen
        * it targets has no way to be told to.
        */}
-      <Link to="/admin/conversations" className="inline-block text-sm text-blue-700 underline">
+      <Link to="/admin/conversations" className="inline-block text-sm text-brand-ink underline">
         View source conversation
       </Link>
 
       {isPending ? (
         <div className="flex flex-col gap-2">
           {error && (
-            <p role="alert" className="text-xs text-red-700">
+            <p role="alert" className="text-xs text-tone-danger-fg">
               {error}
             </p>
           )}
@@ -211,7 +210,7 @@ function ApprovalCard({ approval }: { approval: ApprovalResponse }) {
               type="button"
               disabled={decideMutation.isPending}
               onClick={() => setDecisionOpen("approve")}
-              className="rounded bg-emerald-700 px-3 py-1.5 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
+              className="btn-success"
             >
               Approve
             </button>
@@ -219,7 +218,7 @@ function ApprovalCard({ approval }: { approval: ApprovalResponse }) {
               type="button"
               disabled={decideMutation.isPending}
               onClick={() => setDecisionOpen("deny")}
-              className="rounded bg-red-700 px-3 py-1.5 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
+              className="btn-danger"
             >
               Deny
             </button>
@@ -227,7 +226,7 @@ function ApprovalCard({ approval }: { approval: ApprovalResponse }) {
         </div>
       ) : (
         <div className="space-y-2">
-          {approval.decision_note && <p className="text-sm text-slate-600">Note: {approval.decision_note}</p>}
+          {approval.decision_note && <p className="text-sm text-ink-2">Note: {approval.decision_note}</p>}
           {approval.execution_result !== null && (
             <JsonBlock label="Execution result" value={approval.execution_result} />
           )}
@@ -291,21 +290,24 @@ export function Approvals() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between gap-4">
-        <h1 className="text-lg font-semibold text-slate-900">Approvals</h1>
-        <label className="flex items-center gap-2 text-sm text-slate-600">
+      <PageHeader
+        title="Approvals"
+        description="Privileged actions the agent has requested, waiting on a human decision."
+        actions={
+        <label className="flex items-center gap-2 text-sm text-ink-2">
           Status
           <select
             aria-label="Filter by status"
             value={view}
             onChange={(event) => setView(event.target.value as ApprovalsView)}
-            className="rounded border border-slate-300 px-2 py-1 text-sm"
+            className="field-compact"
           >
             <option value="pending">Pending</option>
             <option value="decided">Decided</option>
           </select>
         </label>
-      </div>
+        }
+      />
 
       {listQuery.isLoading ? (
         <StateBlock status="loading" />

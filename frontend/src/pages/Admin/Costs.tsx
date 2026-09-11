@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import * as admin from "../../api/endpoints/admin";
 import type { CostByDay, CostByModel, CostByTrigger, CostByUser } from "../../api/endpoints/admin";
 import { StateBlock, describeError } from "../../components/StateBlock";
+import { PageHeader } from "../../components/PageHeader";
 import { Table } from "../../components/Table";
 import type { Column } from "../../components/Table";
 import { tokens, usd } from "../../lib/format";
@@ -14,9 +15,9 @@ function pct(value: number): string {
 
 function Total({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded border border-slate-200 bg-white p-3">
-      <p className="text-xs font-medium uppercase tracking-wide text-slate-500">{label}</p>
-      <p className="mt-1 text-lg font-semibold text-slate-900">{value}</p>
+    <div className="card p-3.5">
+      <p className="text-xs font-medium text-ink-3">{label}</p>
+      <p className="mt-1.5 text-lg font-semibold tracking-tight text-ink tabular-nums">{value}</p>
     </div>
   );
 }
@@ -30,21 +31,21 @@ function Total({ label, value }: { label: string; value: string }) {
 function DayBars({ rows }: { rows: CostByDay[] }) {
   const max = rows.reduce((running, row) => Math.max(running, row.cost_usd ?? 0), 0);
   return (
-    <div className="space-y-1">
+    <div className="card space-y-1.5 p-4">
       {rows.map((row) => {
         const width = max > 0 ? ((row.cost_usd ?? 0) / max) * 100 : 0;
         return (
           <div key={row.day} className="flex items-center gap-2 text-xs">
-            <span className="w-24 shrink-0 text-slate-500">{row.day}</span>
-            <div className="h-3 flex-1 rounded bg-slate-100">
+            <span className="w-24 shrink-0 text-ink-3">{row.day}</span>
+            <div className="h-2.5 flex-1 overflow-hidden rounded-full bg-surface-3">
               <div
                 role="img"
                 aria-label={`${row.day}: ${usd(row.cost_usd)}`}
-                className="h-3 rounded bg-slate-700"
+                className="h-2.5 rounded-full bg-brand transition-[width] duration-500"
                 style={{ width: `${width}%` }}
               />
             </div>
-            <span className="w-24 shrink-0 text-right text-slate-700">{usd(row.cost_usd)}</span>
+            <span className="w-24 shrink-0 text-right text-ink-2 tabular-nums">{usd(row.cost_usd)}</span>
           </div>
         );
       })}
@@ -102,7 +103,7 @@ export function Costs() {
       header: "Unpriced calls",
       render: (row) =>
         row.unpriced_calls > 0 ? (
-          <span className="font-medium text-amber-700">{row.unpriced_calls}</span>
+          <span className="font-medium text-tone-warning-fg">{row.unpriced_calls}</span>
         ) : (
           <span>0</span>
         ),
@@ -120,7 +121,10 @@ export function Costs() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-lg font-semibold text-slate-900">Costs</h1>
+      <PageHeader
+        title="Costs"
+        description="Token and spend totals, broken down by day, model, user and trigger."
+      />
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
         <Total label="Input tokens" value={tokens(costs.totals.input_tokens)} />
@@ -139,7 +143,7 @@ export function Costs() {
         // an UNDERSTATEMENT whenever this is non-zero, since every unpriced
         // call folded a genuine $0 into that sum instead of its real
         // (unknown) cost. This is the one signal on the wire that says so.
-        <p className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800">
+        <p className="rounded-lg border border-tone-warning-line bg-tone-warning-bg px-3 py-2.5 text-xs font-medium text-tone-warning-fg">
           Total cost excludes {tokens(costs.totals.unpriced_calls)} unpriced call
           {costs.totals.unpriced_calls === 1 ? "" : "s"} with no known price -- the true total is
           higher than shown.
@@ -147,7 +151,7 @@ export function Costs() {
       )}
 
       <section>
-        <h2 className="mb-2 text-sm font-semibold text-slate-900">Spend by day</h2>
+        <h2 className="mb-2.5 text-sm font-semibold text-ink">Spend by day</h2>
         {costs.by_day.length === 0 ? (
           <StateBlock status="empty" emptyLabel="No spend recorded yet." />
         ) : (
@@ -156,7 +160,7 @@ export function Costs() {
       </section>
 
       <section>
-        <h2 className="mb-2 text-sm font-semibold text-slate-900">By model</h2>
+        <h2 className="mb-2.5 text-sm font-semibold text-ink">By model</h2>
         {costs.by_model.length === 0 ? (
           <StateBlock status="empty" emptyLabel="No model activity yet." />
         ) : (
@@ -165,7 +169,7 @@ export function Costs() {
       </section>
 
       <section>
-        <h2 className="mb-2 text-sm font-semibold text-slate-900">By user</h2>
+        <h2 className="mb-2.5 text-sm font-semibold text-ink">By user</h2>
         {costs.by_user.length === 0 ? (
           <StateBlock status="empty" emptyLabel="No user activity yet." />
         ) : (
@@ -174,7 +178,7 @@ export function Costs() {
       </section>
 
       <section>
-        <h2 className="mb-2 text-sm font-semibold text-slate-900">By trigger</h2>
+        <h2 className="mb-2.5 text-sm font-semibold text-ink">By trigger</h2>
         {costs.by_trigger.length === 0 ? (
           <StateBlock status="empty" emptyLabel="No trigger activity yet." />
         ) : (
