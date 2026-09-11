@@ -21,6 +21,49 @@ actually match. Administrators get the whole story behind every answer.
 
 Every screen ships in both themes; the shots above alternate light and dark.
 
+## Running it with Docker
+
+The whole app — Postgres, Chroma, the API and the web UI — from one command:
+
+```sh
+cp .env.example .env        # then set ANTHROPIC_API_KEY; JWT_SECRET has a dev default
+docker compose up --build
+```
+
+Then open **http://localhost:5173** and sign in as `admin` / `admin`.
+
+| service | port | what it is |
+| --- | --- | --- |
+| `frontend` | 5173 | the built React app, served by nginx |
+| `backend` | 8080 | FastAPI |
+| `postgres18` | 5432 | Postgres 18 |
+| `chroma` | 8000 | Chroma vector store |
+
+The backend's entrypoint creates the `ticketing` database, runs migrations
+and seeds the 126 demo accounts on every boot — all idempotent, so a
+restart is safe and no manual `make db-create && make migrate && make seed`
+is needed.
+
+Things worth knowing:
+
+- **`ANTHROPIC_API_KEY` is required to boot.** `validate_boot` refuses to
+  start without it, and the container exits naming what is missing. Every
+  screen still loads without one; only sending a chat message fails.
+- **Retrieval is empty until you ingest.** `corporate_rag_dataset/` is not
+  loaded by default because the first run downloads an embedding model and
+  takes minutes. Run it once with `RUN_INGEST=true docker compose up`, or
+  `docker compose exec backend python /srv/scripts/ingest_dataset.py`.
+- **`VITE_API_BASE` is baked in at build time**, not read at runtime — Vite
+  inlines `import.meta.env`. It has to be the URL your *browser* uses
+  (`http://localhost:8080`), never the `backend` service name, which only
+  resolves inside the compose network. Change it and rebuild:
+  `VITE_API_BASE=... docker compose build frontend`.
+- `docker compose down -v` throws away the database, the vector store and
+  uploaded attachments; plain `down` keeps all three.
+
+If you would rather run the pieces directly on your machine, carry on
+below.
+
 ## Local environment
 
 Dev services (Postgres 18, Chroma) are expected to already be running as
@@ -41,15 +84,20 @@ Anywhere this doc says `make <target>`, that's equivalent to
 
 ### Clean-slate setup
 
-If you tear the environment down (or are starting fresh) and want to bring
-it back up from `docker-compose.yml`, run these in order:
+To run the backend on your machine but keep its two dependencies in
+containers, start just those and prepare the database yourself:
 
 ```sh
-docker compose up -d
+docker compose up -d postgres18 chroma
 make db-create   # creates the `ticketing` database (compose's default POSTGRES_DB is `mydb`)
 make migrate     # applies Alembic migrations
 make seed        # loads seed data
 ```
+
+(`docker compose up` with no service named also starts the `backend` and
+`frontend` containers, which do all three of those steps themselves — see
+[Running it with Docker](#running-it-with-docker). Naming the two services
+explicitly is what keeps them out of the way.)
 
 `db-create` is idempotent — safe to run again against an already-set-up
 environment.

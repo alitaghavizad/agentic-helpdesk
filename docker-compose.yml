@@ -1,15 +1,18 @@
-# Reference compose file for reproducing the dev environment from scratch.
-# NOTE: In this project's current dev session, `postgres18` and `chroma`
-# were already running as manually-created containers before this file
-# existed. `make db-up` therefore health-checks those containers rather
-# than invoking `docker compose up`. Use this file if you tear the
-# environment down and want to bring it back up from a clean slate.
+# The whole app: `docker compose up --build`, then http://localhost:5173.
 #
-# Clean-slate sequence: this container's POSTGRES_DB is `mydb`, not the
-# `ticketing` database the app actually connects to, so bringing this up
-# alone is not enough. Run, in order:
-#   docker compose up -d && make db-create && make migrate && make seed
-# See README.md for details.
+# The backend refuses to boot without ANTHROPIC_API_KEY (app/config.py's
+# validate_boot), so put one in a repo-root `.env` -- `cp .env.example .env`
+# and fill it in. That file is gitignored and is read here via `env_file`;
+# `required: false` means compose still starts without it, and the backend
+# then exits with a message naming exactly what is missing rather than a
+# stack trace.
+#
+# Everything a container needs to reach another container is overridden in
+# `environment:` below, which takes precedence over `.env`. Those use
+# compose SERVICE NAMES (postgres18, chroma) and only resolve inside the
+# compose network -- the `localhost` values in `.env` are for running the
+# app straight on your machine, and both spellings coexist on purpose.
+
 services:
   postgres18:
     image: postgres:18
@@ -17,11 +20,19 @@ services:
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: "123"
+      # Not `ticketing`: this stays as it was so an existing volume is not
+      # disturbed. The backend's entrypoint creates `ticketing` on startup.
       POSTGRES_DB: mydb
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/18/docker
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
 
   chroma:
     image: ghcr.io/chroma-core/chroma:1.0.0
@@ -30,7 +41,84 @@ services:
       - "8000:8000"
     volumes:
       - chroma_data:/data
+    healthcheck:
+      # Chroma's image has no curl or wget, but it does have Python.
+      test:
+        - CMD-SHELL
+        - python -c "import urllib.request;urllib.request.urlopen('http://localhost:8000/api/v2/heartbeat')"
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  backend:
+    build:
+      # Repo root, not ./backend: the image also needs scripts/ and
+      # corporate_rag_dataset/, which live above backend/.
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: helpdesk-backend
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      # Service names, not localhost -- inside the network, `localhost` is
+      # this container.
+      DATABASE_URL: postgresql+psycopg://postgres:123@postgres18:5432/ticketing
+      CHROMA_URL: http://chroma:8000
+      # `mcp` shells out to `uvx chroma-mcp`, which needs a PyPI fetch at
+      # runtime; `direct` talks to the same Chroma over HTTP with no such
+      # dependency, which is what you want in a container.
+      CHROMA_BACKEND: direct
+      # The origin the BROWSER loads the app from, for CORS.
+      FRONTEND_ORIGIN: http://localhost:5173
+      # Dev-only default so the stack starts without hand-editing anything.
+      # Anything real must set its own; validate_boot rejects the value
+      # shipped in .env.example by name, and should reject this one too the
+      # moment this is more than a local demo.
+      JWT_SECRET: ${JWT_SECRET:-docker-compose-local-dev-secret-not-for-real-use}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      # Loads corporate_rag_dataset/ into Chroma on boot. Off by default:
+      # it pulls an embedding model down on first run and takes minutes.
+      # Until it has been run once, the agent answers with no documents to
+      # retrieve from.
+      RUN_INGEST: ${RUN_INGEST:-false}
+    ports:
+      - "8080:8080"
+    volumes:
+      # Uploaded attachments are content-addressed files on disk, not rows,
+      # so they need to outlive the container like the databases do.
+      - attachment_storage:/srv/backend/storage/uploads
+    depends_on:
+      postgres18:
+        condition: service_healthy
+      chroma:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - python -c "import urllib.request;urllib.request.urlopen('http://localhost:8080/api/health')"
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # Baked in at build time (Vite inlines import.meta.env), and read by
+        # the browser, so it must be the HOST-visible backend URL.
+        VITE_API_BASE: ${VITE_API_BASE:-http://localhost:8080}
+    container_name: helpdesk-frontend
+    ports:
+      - "5173:80"
+    depends_on:
+      backend:
+        condition: service_started
 
 volumes:
   postgres_data:
   chroma_data:
+  attachment_storage:

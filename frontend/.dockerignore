@@ -1,0 +1,9 @@
+# The frontend image's build context is ./frontend, so the repo-root
+# .dockerignore does not apply here.
+node_modules
+dist
+test-results
+playwright-report
+.env
+.env.local
+openapi.json
