@@ -53,7 +53,15 @@ COPY scripts /srv/scripts
 COPY corporate_rag_dataset /srv/corporate_rag_dataset
 
 COPY backend/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
-RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+# Strip CR before making it executable. .gitattributes now pins this file to
+# LF, but that only governs a FRESH checkout -- a tree cloned on Windows
+# before it existed still holds CRLF, and the shebang then names an
+# interpreter called "bash\r":
+#     env: 'bash\r': No such file or directory
+# One sed here means the image builds from either tree, so nobody has to
+# re-clone to unbreak themselves.
+RUN sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh \
+    && chmod +x /usr/local/bin/docker-entrypoint.sh
 
 # BACKEND_HOST defaults to 127.0.0.1, which is right on a laptop and wrong
 # in a container: bound to its own loopback, nothing reaches the published
