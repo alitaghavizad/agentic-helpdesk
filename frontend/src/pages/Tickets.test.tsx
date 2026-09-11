@@ -109,7 +109,7 @@ describe("Tickets", () => {
 
     // No filtering client-side -- the client sends the plain GET and
     // trusts the server's row scoping entirely (spec 6.4).
-    expect(fetchMock).toHaveBeenCalledWith("http://localhost:8000/api/tickets", expect.anything());
+    expect(fetchMock).toHaveBeenCalledWith("http://localhost:8080/api/tickets", expect.anything());
   });
 
   it("re-queries GET /api/tickets?status= when the status filter changes", async () => {

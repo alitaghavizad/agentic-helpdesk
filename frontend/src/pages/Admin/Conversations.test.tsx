@@ -456,7 +456,7 @@ describe("Conversations", () => {
     expect(await screen.findByText("Convo 50")).toBeInTheDocument();
     expect(screen.queryByText("Convo 0")).not.toBeInTheDocument();
     expect(screen.getByText("Showing 51–60 of 60")).toBeInTheDocument();
-    expect(requested).toContain("http://localhost:8000/api/admin/conversations?limit=50&offset=50");
+    expect(requested).toContain("http://localhost:8080/api/admin/conversations?limit=50&offset=50");
   });
 
   it("shows a loading state before the conversations response arrives", async () => {

@@ -206,10 +206,10 @@ describe("Admin Users", () => {
     expect(await screen.findByText("user-50")).toBeInTheDocument();
 
     expect(requestedOffsets).toEqual([
-      "http://localhost:8000/api/admin/users?offset=0",
-      "http://localhost:8000/api/admin/users?offset=50",
-      "http://localhost:8000/api/admin/users?offset=100",
-      "http://localhost:8000/api/admin/users?offset=50",
+      "http://localhost:8080/api/admin/users?offset=0",
+      "http://localhost:8080/api/admin/users?offset=50",
+      "http://localhost:8080/api/admin/users?offset=100",
+      "http://localhost:8080/api/admin/users?offset=50",
     ]);
   });
 

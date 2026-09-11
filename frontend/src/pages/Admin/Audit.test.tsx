@@ -75,7 +75,7 @@ describe("Admin Audit", () => {
   it("renders actor, action, target, payload and timestamp", async () => {
     fetchMock.mockImplementation(async (url: string) => {
       const u = String(url);
-      if (u.startsWith("http://localhost:8000/api/admin/audit")) return jsonResponse(auditPage([ENTRY_USER_UPDATE]));
+      if (u.startsWith("http://localhost:8080/api/admin/audit")) return jsonResponse(auditPage([ENTRY_USER_UPDATE]));
       throw new Error(`unexpected call: ${u}`);
     });
 
@@ -93,7 +93,7 @@ describe("Admin Audit", () => {
   it("renders a null actor_id and a null ip_address without crashing", async () => {
     fetchMock.mockImplementation(async (url: string) => {
       const u = String(url);
-      if (u.startsWith("http://localhost:8000/api/admin/audit")) return jsonResponse(auditPage([ENTRY_SYSTEM]));
+      if (u.startsWith("http://localhost:8080/api/admin/audit")) return jsonResponse(auditPage([ENTRY_SYSTEM]));
       throw new Error(`unexpected call: ${u}`);
     });
 
@@ -111,7 +111,7 @@ describe("Admin Audit", () => {
     const user = userEvent.setup();
     fetchMock.mockImplementation(async (url: string) => {
       const u = String(url);
-      if (u.startsWith("http://localhost:8000/api/admin/audit")) return jsonResponse(auditPage([ENTRY_USER_UPDATE]));
+      if (u.startsWith("http://localhost:8080/api/admin/audit")) return jsonResponse(auditPage([ENTRY_USER_UPDATE]));
       throw new Error(`unexpected call: ${u}`);
     });
 
@@ -129,7 +129,7 @@ describe("Admin Audit", () => {
     const user = userEvent.setup();
     fetchMock.mockImplementation(async (url: string) => {
       const u = String(url);
-      if (u.startsWith("http://localhost:8000/api/admin/audit")) return jsonResponse(auditPage([ENTRY_USER_UPDATE]));
+      if (u.startsWith("http://localhost:8080/api/admin/audit")) return jsonResponse(auditPage([ENTRY_USER_UPDATE]));
       throw new Error(`unexpected call: ${u}`);
     });
 
@@ -147,7 +147,7 @@ describe("Admin Audit", () => {
     const user = userEvent.setup();
     fetchMock.mockImplementation(async (url: string) => {
       const u = String(url);
-      if (u.startsWith("http://localhost:8000/api/admin/audit")) return jsonResponse(auditPage([ENTRY_USER_UPDATE]));
+      if (u.startsWith("http://localhost:8080/api/admin/audit")) return jsonResponse(auditPage([ENTRY_USER_UPDATE]));
       throw new Error(`unexpected call: ${u}`);
     });
 
@@ -164,7 +164,7 @@ describe("Admin Audit", () => {
   it("re-queries with an ISO since bound when the since-date filter changes", async () => {
     fetchMock.mockImplementation(async (url: string) => {
       const u = String(url);
-      if (u.startsWith("http://localhost:8000/api/admin/audit")) return jsonResponse(auditPage([ENTRY_USER_UPDATE]));
+      if (u.startsWith("http://localhost:8080/api/admin/audit")) return jsonResponse(auditPage([ENTRY_USER_UPDATE]));
       throw new Error(`unexpected call: ${u}`);
     });
 
@@ -184,7 +184,7 @@ describe("Admin Audit", () => {
     fetchMock.mockImplementation(async (url: string) => {
       const u = String(url);
       const params = new URL(u).searchParams;
-      if (!u.startsWith("http://localhost:8000/api/admin/audit")) throw new Error(`unexpected call: ${u}`);
+      if (!u.startsWith("http://localhost:8080/api/admin/audit")) throw new Error(`unexpected call: ${u}`);
       if (params.get("offset") === "50" && !params.get("action")) {
         return jsonResponse(auditPage(page2, { offset: 50, total: 60 }));
       }
@@ -213,7 +213,7 @@ describe("Admin Audit", () => {
   it("renders 'No matching entries.' for an empty filtered result, not a blank table", async () => {
     fetchMock.mockImplementation(async (url: string) => {
       const u = String(url);
-      if (u.startsWith("http://localhost:8000/api/admin/audit")) return jsonResponse(auditPage([], { total: 0 }));
+      if (u.startsWith("http://localhost:8080/api/admin/audit")) return jsonResponse(auditPage([], { total: 0 }));
       throw new Error(`unexpected call: ${u}`);
     });
 
@@ -226,7 +226,7 @@ describe("Admin Audit", () => {
     let resolveList!: (value: Response) => void;
     fetchMock.mockImplementation(async (url: string) => {
       const u = String(url);
-      if (u.startsWith("http://localhost:8000/api/admin/audit")) {
+      if (u.startsWith("http://localhost:8080/api/admin/audit")) {
         return new Promise<Response>((resolve) => {
           resolveList = resolve;
         });
@@ -243,7 +243,7 @@ describe("Admin Audit", () => {
   it("renders a failed audit fetch as StateBlock's error state, never as an empty table", async () => {
     fetchMock.mockImplementation(async (url: string) => {
       const u = String(url);
-      if (u.startsWith("http://localhost:8000/api/admin/audit")) return jsonResponse({ detail: "Forbidden: admin role required" }, 403);
+      if (u.startsWith("http://localhost:8080/api/admin/audit")) return jsonResponse({ detail: "Forbidden: admin role required" }, 403);
       throw new Error(`unexpected call: ${u}`);
     });
 
