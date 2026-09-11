@@ -60,8 +60,15 @@ COPY backend/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 #     env: 'bash\r': No such file or directory
 # One sed here means the image builds from either tree, so nobody has to
 # re-clone to unbreak themselves.
+# The trailing grep is an assertion, not decoration: if a CR ever survives
+# this step, the BUILD fails here with a clear message, instead of shipping
+# an image whose only symptom is a container restart-looping on
+# "env: 'bash\r': No such file or directory" -- which reads like a code bug
+# and is really a checkout artefact.
 RUN sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh \
-    && chmod +x /usr/local/bin/docker-entrypoint.sh
+    && chmod +x /usr/local/bin/docker-entrypoint.sh \
+    && head -1 /usr/local/bin/docker-entrypoint.sh | grep -q 'bash$' \
+    && echo "entrypoint line endings OK"
 
 # BACKEND_HOST defaults to 127.0.0.1, which is right on a laptop and wrong
 # in a container: bound to its own loopback, nothing reaches the published
