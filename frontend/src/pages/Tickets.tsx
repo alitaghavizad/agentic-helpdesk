@@ -12,6 +12,8 @@ import { Table } from "../components/Table";
 import type { Column } from "../components/Table";
 import { Modal } from "../components/Modal";
 import { StateBlock, describeError } from "../components/StateBlock";
+import { PageHeader } from "../components/PageHeader";
+import { Icon } from "../components/Icon";
 import { dateTime } from "../lib/format";
 
 const STATUS_TONE: Record<string, BadgeTone> = {
@@ -87,7 +89,7 @@ function ResolveModal({
 
   return (
     <Modal title={`Resolve ${ticketNumber}`} onClose={onCancel}>
-      <label htmlFor="resolution" className="mb-1 block text-xs font-medium text-slate-700">
+      <label htmlFor="resolution" className="mb-1 block text-xs font-medium text-ink-2">
         Resolution
       </label>
       <textarea
@@ -96,17 +98,17 @@ function ResolveModal({
         value={resolution}
         onChange={(event) => setResolution(event.target.value)}
         rows={4}
-        className="mb-3 w-full rounded border border-slate-300 px-2 py-1 text-sm"
+        className="mb-3 w-full rounded border border-line-strong px-2 py-1 text-sm"
       />
       <div className="flex justify-end gap-2">
-        <button type="button" onClick={onCancel} className="rounded px-3 py-1.5 text-sm text-slate-600">
+        <button type="button" onClick={onCancel} className="rounded px-3 py-1.5 text-sm text-ink-2">
           Cancel
         </button>
         <button
           type="button"
           disabled={!canSubmit}
           onClick={() => onSubmit(resolution.trim())}
-          className="rounded bg-slate-900 px-3 py-1.5 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
+          className="rounded btn-primary disabled:cursor-not-allowed disabled:opacity-50"
         >
           {submitting ? "Resolving…" : "Resolve"}
         </button>
@@ -135,7 +137,7 @@ function ReassignModal({
 
   return (
     <Modal title={`Reassign ${ticketNumber}`} onClose={onCancel}>
-      <label htmlFor="assignee-ref" className="mb-1 block text-xs font-medium text-slate-700">
+      <label htmlFor="assignee-ref" className="mb-1 block text-xs font-medium text-ink-2">
         Helpdesk specialist ref
       </label>
       <input
@@ -143,9 +145,9 @@ function ReassignModal({
         aria-label="Helpdesk specialist ref"
         value={assigneeRef}
         onChange={(event) => setAssigneeRef(event.target.value)}
-        className="mb-3 w-full rounded border border-slate-300 px-2 py-1 text-sm"
+        className="mb-3 w-full rounded border border-line-strong px-2 py-1 text-sm"
       />
-      <label htmlFor="reassign-rationale" className="mb-1 block text-xs font-medium text-slate-700">
+      <label htmlFor="reassign-rationale" className="mb-1 block text-xs font-medium text-ink-2">
         Rationale
       </label>
       <textarea
@@ -154,17 +156,17 @@ function ReassignModal({
         value={rationale}
         onChange={(event) => setRationale(event.target.value)}
         rows={3}
-        className="mb-3 w-full rounded border border-slate-300 px-2 py-1 text-sm"
+        className="mb-3 w-full rounded border border-line-strong px-2 py-1 text-sm"
       />
       <div className="flex justify-end gap-2">
-        <button type="button" onClick={onCancel} className="rounded px-3 py-1.5 text-sm text-slate-600">
+        <button type="button" onClick={onCancel} className="rounded px-3 py-1.5 text-sm text-ink-2">
           Cancel
         </button>
         <button
           type="button"
           disabled={!canSubmit}
           onClick={() => onSubmit(assigneeRef.trim(), rationale.trim())}
-          className="rounded bg-slate-900 px-3 py-1.5 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
+          className="rounded btn-primary disabled:cursor-not-allowed disabled:opacity-50"
         >
           {submitting ? "Reassigning…" : "Reassign"}
         </button>
@@ -271,14 +273,14 @@ function TicketControls({
           // status: "resolved" (POST /resolve is the only path there), and
           // a control that only ever displays its own current value while
           // offering no other reachable option would just be theatre.
-          <span className="rounded border border-slate-200 px-2 py-1 text-xs text-slate-500">resolved</span>
+          <span className="rounded border border-line px-2 py-1 text-xs text-ink-3">resolved</span>
         ) : (
           <select
             aria-label={`Status for ${ticket.ticket_number}`}
             value={ticket.status}
             onChange={handleStatusChange}
             disabled={statusMutation.isPending}
-            className="rounded border border-slate-300 px-2 py-1 text-xs"
+            className="field-compact text-xs"
           >
             {EDITABLE_STATUSES.map((status) => (
               <option key={status} value={status}>
@@ -292,7 +294,7 @@ function TicketControls({
           value={ticket.priority}
           onChange={handlePriorityChange}
           disabled={priorityMutation.isPending}
-          className="rounded border border-slate-300 px-2 py-1 text-xs"
+          className="field-compact text-xs"
         >
           {PRIORITIES.map((priority) => (
             <option key={priority} value={priority}>
@@ -303,20 +305,20 @@ function TicketControls({
         <button
           type="button"
           onClick={() => setResolveOpen(true)}
-          className="rounded border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
+          className="btn-secondary px-2 py-1 text-xs"
         >
           Resolve
         </button>
         <button
           type="button"
           onClick={() => setReassignOpen(true)}
-          className="rounded border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
+          className="btn-secondary px-2 py-1 text-xs"
         >
           Reassign
         </button>
       </div>
       {error && (
-        <p role="alert" className="text-xs text-red-700">
+        <p role="alert" className="text-xs text-tone-danger-fg">
           {error}
         </p>
       )}
@@ -343,20 +345,39 @@ function TicketControls({
 
 function TicketDetailView({ ticket, isStaff }: { ticket: TicketDetail; isStaff: boolean }) {
   return (
-    <div className="space-y-3 rounded border border-slate-200 bg-white p-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="font-mono text-sm text-slate-500">{ticket.ticket_number}</span>
-        <Badge tone={STATUS_TONE[ticket.status] ?? "neutral"}>{ticket.status}</Badge>
-        <Badge tone={PRIORITY_TONE[ticket.priority] ?? "neutral"}>{ticket.priority}</Badge>
+    <div className="card overflow-hidden">
+      <div className="border-b border-line bg-surface-2/50 px-5 py-4">
+        <div className="mb-2 flex flex-wrap items-center gap-2">
+          <span className="font-mono text-xs text-ink-3">{ticket.ticket_number}</span>
+          <Badge tone={STATUS_TONE[ticket.status] ?? "neutral"}>{ticket.status}</Badge>
+          <Badge tone={PRIORITY_TONE[ticket.priority] ?? "neutral"}>{ticket.priority}</Badge>
+        </div>
+        <h1 className="text-xl font-semibold tracking-tight text-ink">{ticket.title}</h1>
       </div>
-      <h1 className="text-lg font-semibold text-slate-900">{ticket.title}</h1>
-      <p className="whitespace-pre-wrap text-sm text-slate-700">{ticket.body}</p>
-      <p className="text-xs text-slate-500">Assignee: {ticket.assignee_helpdesk_ref || "—"}</p>
-      <p className="text-xs text-slate-500">Created: {dateTime(ticket.created_at)}</p>
-      {ticket.resolution && (
-        <p className="rounded bg-emerald-50 p-2 text-sm text-emerald-800">Resolution: {ticket.resolution}</p>
-      )}
-      <TicketControls ticket={ticket} isStaff={isStaff} />
+
+      <div className="space-y-4 px-5 py-4">
+        <p className="text-sm leading-relaxed whitespace-pre-wrap text-ink-2">{ticket.body}</p>
+
+        <dl className="grid grid-cols-2 gap-4 border-t border-line pt-4 text-xs sm:max-w-md">
+          <div>
+            <dt className="eyebrow">Assignee</dt>
+            <dd className="mt-1 text-ink-2">{ticket.assignee_helpdesk_ref || "—"}</dd>
+          </div>
+          <div>
+            <dt className="eyebrow">Created</dt>
+            <dd className="mt-1 text-ink-2">{dateTime(ticket.created_at)}</dd>
+          </div>
+        </dl>
+
+        {ticket.resolution && (
+          <div className="flex gap-2 rounded-lg border border-tone-success-line bg-tone-success-bg p-3 text-sm text-tone-success-fg">
+            <Icon name="check" className="mt-0.5 size-4 shrink-0" />
+            <span>Resolution: {ticket.resolution}</span>
+          </div>
+        )}
+
+        <TicketControls ticket={ticket} isStaff={isStaff} />
+      </div>
     </div>
   );
 }
@@ -411,15 +432,17 @@ export function Tickets() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h1 className="text-lg font-semibold text-slate-900">Tickets</h1>
-        <label className="flex items-center gap-2 text-sm text-slate-600">
+      <PageHeader
+        title="Tickets"
+        description="Requests you have raised, and where each one stands."
+        actions={
+        <label className="flex items-center gap-2 text-sm text-ink-2">
           Status
           <select
             aria-label="Filter by status"
             value={statusFilter}
             onChange={(event) => setStatusFilter(event.target.value as TicketStatus | "")}
-            className="rounded border border-slate-300 px-2 py-1 text-sm"
+            className="field-compact"
           >
             <option value="">All</option>
             {STATUS_FILTER_OPTIONS.map((status) => (
@@ -429,7 +452,8 @@ export function Tickets() {
             ))}
           </select>
         </label>
-      </div>
+        }
+      />
 
       {listQuery.isLoading ? (
         <StateBlock status="loading" />

@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import type { ReactNode, RefObject } from "react";
+import { Icon } from "./Icon";
 
 interface ModalProps {
   title: string;
@@ -138,7 +139,7 @@ export function Modal({ title, onClose, children, restoreFocusFallback }: ModalP
 
   return (
     <div
-      className="fixed inset-0 z-20 flex items-center justify-center bg-slate-900/40 p-4"
+      className="fixed inset-0 z-20 flex animate-fade items-center justify-center bg-ink/45 p-4 backdrop-blur-sm"
       onClick={onClose}
     >
       <div
@@ -148,17 +149,17 @@ export function Modal({ title, onClose, children, restoreFocusFallback }: ModalP
         aria-label={title}
         tabIndex={-1}
         onClick={(event) => event.stopPropagation()}
-        className="w-full max-w-md rounded bg-white p-4 shadow-xl"
+        className="w-full max-w-md animate-rise rounded-card border border-line bg-surface p-5 shadow-overlay"
       >
-        <div className="mb-3 flex items-center justify-between gap-4">
-          <h2 className="text-sm font-semibold text-slate-900">{title}</h2>
+        <div className="mb-4 flex items-center justify-between gap-4">
+          <h2 className="text-sm font-semibold text-ink">{title}</h2>
           <button
             type="button"
             onClick={onClose}
             aria-label="Close"
-            className="rounded text-slate-400 hover:text-slate-600"
+            className="-mr-1 grid size-7 place-items-center rounded-lg text-ink-3 transition hover:bg-surface-2 hover:text-ink"
           >
-            ✕
+            <Icon name="close" className="size-4" />
           </button>
         </div>
         {children}

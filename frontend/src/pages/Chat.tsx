@@ -9,6 +9,7 @@ import type { Conversation, MessageView } from "../api/endpoints/chat";
 import { conversationQueryKey, conversationsQueryKey, useChatTurn } from "../hooks/useChatTurn";
 import type { Outcome, ToolRow } from "../hooks/turnReducer";
 import { StateBlock, describeError } from "../components/StateBlock";
+import { Icon, Spinner } from "../components/Icon";
 import { dateTime } from "../lib/format";
 
 /**
@@ -54,12 +55,39 @@ function outcomeLabel(outcome: Outcome): { text: string; to?: string } {
   }
 }
 
+const TOOL_TONE: Record<ToolRow["status"], string> = {
+  running: "border-line bg-surface-2 text-ink-3",
+  ok: "border-tone-success-line bg-tone-success-bg text-tone-success-fg",
+  error: "border-tone-danger-line bg-tone-danger-bg text-tone-danger-fg",
+};
+
 function ToolRowView({ tool }: { tool: ToolRow }) {
   const label = tool.status === "running" ? "running" : tool.status === "ok" ? "done" : "failed";
   return (
-    <li className="text-xs text-slate-500">
-      used <span className="font-medium text-slate-700">{tool.name}</span> ({label})
+    <li
+      className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs ${TOOL_TONE[tool.status]}`}
+    >
+      {tool.status === "running" ? (
+        <Spinner className="size-3" />
+      ) : (
+        <Icon name={tool.status === "ok" ? "check" : "alert"} className="size-3" />
+      )}
+      used <span className="font-medium">{tool.name}</span> ({label})
     </li>
+  );
+}
+
+/** Avatar disc beside a transcript bubble -- "you" or the agent. */
+function Avatar({ role }: { role: "user" | "assistant" }) {
+  return (
+    <span
+      aria-hidden="true"
+      className={`mt-0.5 grid size-7 shrink-0 place-items-center rounded-full text-[10px] font-semibold tracking-tight ${
+        role === "user" ? "bg-surface-3 text-ink-2" : "bg-brand text-on-brand"
+      }`}
+    >
+      {role === "user" ? "YOU" : <Icon name="sparkles" className="size-3.5" />}
+    </span>
   );
 }
 
@@ -71,7 +99,7 @@ function ConversationList({
   onSelect: (id: string) => void;
 }) {
   if (conversations.length === 0) {
-    return <StateBlock status="empty" emptyLabel="No conversations yet. Start one below." />;
+    return <StateBlock status="empty" emptyLabel="No conversations yet. Start one above." />;
   }
   return (
     <ul className="space-y-1">
@@ -81,11 +109,14 @@ function ConversationList({
             type="button"
             onClick={() => onSelect(conversation.id)}
             aria-current={conversation.id === selectedId}
-            className={`w-full rounded px-3 py-2 text-left text-sm ${
-              conversation.id === selectedId ? "bg-slate-900 text-white" : "text-slate-700 hover:bg-slate-100"
+            className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition ${
+              conversation.id === selectedId
+                ? "bg-brand-soft font-medium text-brand-ink"
+                : "text-ink-2 hover:bg-surface-2 hover:text-ink"
             }`}
           >
-            {conversation.title ?? "Untitled conversation"}
+            <Icon name="message" className="size-3.5 shrink-0 opacity-70" />
+            <span className="truncate">{conversation.title ?? "Untitled conversation"}</span>
           </button>
         </li>
       ))}
@@ -205,15 +236,13 @@ export function Chat() {
   const showLiveTurn = !turnPersisted
     && (busy || turn.text.length > 0 || turn.tools.length > 0 || turn.outcomes.length > 0 || turn.error !== null);
   const showPendingUser = pendingUserContent !== null && !userMessagePersisted;
+  const selectedTitle = conversationQuery.data?.title ?? "Untitled conversation";
 
   return (
-    <div className="grid grid-cols-1 gap-6 md:grid-cols-[16rem_1fr]">
+    <div className="grid grid-cols-1 gap-6 md:grid-cols-[17rem_1fr]">
       <aside className="space-y-3">
-        <button
-          type="button"
-          onClick={handleNewConversation}
-          className="w-full rounded border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
-        >
+        <button type="button" onClick={handleNewConversation} className="btn-primary w-full py-2">
+          <Icon name="plus" className="size-4" />
           New conversation
         </button>
         {conversationsQuery.isLoading ? (
@@ -229,13 +258,31 @@ export function Chat() {
         )}
       </aside>
 
-      <section className="flex min-h-[28rem] flex-col rounded border border-slate-200 bg-white">
+      <section className="card flex min-h-[32rem] flex-col overflow-hidden">
         {selectedId === null ? (
-          <div className="flex flex-1 items-center justify-center">
-            <StateBlock status="empty" emptyLabel="Select a conversation, or start a new one." />
+          <div className="flex flex-1 flex-col items-center justify-center gap-3 p-8 text-center">
+            <span aria-hidden="true" className="grid size-12 place-items-center rounded-full bg-brand-soft text-brand-ink">
+              <Icon name="sparkles" className="size-5" />
+            </span>
+            <p className="text-sm font-medium text-ink">Select a conversation, or start a new one.</p>
+            <p className="max-w-xs text-sm text-ink-3">
+              Ask about access, hardware, accounts or policy — the agent answers from Northstar's own
+              documentation.
+            </p>
           </div>
         ) : (
           <>
+            <header className="flex items-center gap-2 border-b border-line px-4 py-3">
+              <Icon name="message" className="size-4 shrink-0 text-ink-3" />
+              <h1 className="truncate text-sm font-semibold text-ink">{selectedTitle}</h1>
+              {busy && (
+                <span className="ml-auto flex items-center gap-1.5 text-xs font-medium text-ink-3">
+                  <Spinner className="size-3 text-brand" />
+                  Thinking…
+                </span>
+              )}
+            </header>
+
             <div className="flex-1 space-y-4 overflow-y-auto p-4">
               {conversationQuery.isLoading ? (
                 <StateBlock status="loading" />
@@ -244,101 +291,158 @@ export function Chat() {
               ) : messages.length === 0 && !showLiveTurn && !showPendingUser ? (
                 <StateBlock status="empty" emptyLabel="No messages yet. Say hello below." />
               ) : (
-                <ul className="space-y-3">
+                <ul className="space-y-5">
                   {messages.map((message) => (
                     <li
                       key={message.id}
-                      className={`rounded p-3 text-sm ${
-                        message.role === "user" ? "bg-slate-100 text-slate-900" : "bg-blue-50 text-slate-900"
-                      }`}
+                      className={`flex animate-fade gap-2.5 ${message.role === "user" ? "flex-row-reverse" : ""}`}
                     >
-                      <p className="mb-1 text-xs font-medium uppercase tracking-wide text-slate-500">
-                        {message.role} · {dateTime(message.created_at)}
-                      </p>
-                      <p className="whitespace-pre-wrap">{messageText(message.content)}</p>
-                      {message.role === "assistant" && message.run_id && principal?.role === "admin" && (
-                        <Link to={`/admin/traces/${message.run_id}`} className="mt-1 inline-block text-xs text-blue-700 underline">
-                          View trace
-                        </Link>
-                      )}
+                      <Avatar role={message.role === "user" ? "user" : "assistant"} />
+                      <div className={`min-w-0 max-w-[80%] ${message.role === "user" ? "items-end text-right" : ""}`}>
+                        <p className="mb-1 text-xs text-ink-3">
+                          {message.role} · {dateTime(message.created_at)}
+                        </p>
+                        <div
+                          className={`inline-block rounded-2xl px-3.5 py-2.5 text-left text-sm ${
+                            message.role === "user"
+                              ? "rounded-tr-sm bg-brand text-on-brand"
+                              : "rounded-tl-sm border border-line bg-surface-2 text-ink"
+                          }`}
+                        >
+                          <p className="whitespace-pre-wrap">{messageText(message.content)}</p>
+                        </div>
+                        {message.role === "assistant" && message.run_id && principal?.role === "admin" && (
+                          <Link
+                            to={`/admin/traces/${message.run_id}`}
+                            className="mt-1.5 inline-flex items-center gap-1 text-xs font-medium text-brand-ink hover:underline"
+                          >
+                            <Icon name="activity" className="size-3" />
+                            View trace
+                          </Link>
+                        )}
+                      </div>
                     </li>
                   ))}
 
                   {showPendingUser && (
-                    <li className="rounded bg-slate-100 p-3 text-sm text-slate-900" aria-label="you, sending">
-                      <p className="mb-1 text-xs font-medium uppercase tracking-wide text-slate-500">you</p>
-                      <p className="whitespace-pre-wrap">{pendingUserContent}</p>
+                    <li className="flex animate-fade flex-row-reverse gap-2.5" aria-label="you, sending">
+                      <Avatar role="user" />
+                      <div className="min-w-0 max-w-[80%] text-right">
+                        <p className="mb-1 text-xs text-ink-3">you</p>
+                        <div className="inline-block rounded-2xl rounded-tr-sm bg-brand px-3.5 py-2.5 text-left text-sm text-on-brand opacity-80">
+                          <p className="whitespace-pre-wrap">{pendingUserContent}</p>
+                        </div>
+                      </div>
                     </li>
                   )}
 
                   {showLiveTurn && (
-                    <li className="rounded bg-blue-50 p-3 text-sm text-slate-900" aria-label="assistant, streaming">
-                      <p className="mb-1 text-xs font-medium uppercase tracking-wide text-slate-500">assistant</p>
-                      <p className="whitespace-pre-wrap">{turn.text}</p>
+                    <li className="flex animate-fade gap-2.5" aria-label="assistant, streaming">
+                      <Avatar role="assistant" />
+                      <div className="min-w-0 max-w-[80%]">
+                        <p className="mb-1 text-xs text-ink-3">assistant</p>
+                        <div className="rounded-2xl rounded-tl-sm border border-line bg-surface-2 px-3.5 py-2.5 text-sm text-ink">
+                          {turn.text ? (
+                            <p className="whitespace-pre-wrap">{turn.text}</p>
+                          ) : (
+                            <span className="flex gap-1" aria-hidden="true">
+                              <span className="size-1.5 animate-pulse-soft rounded-full bg-ink-3" />
+                              <span className="size-1.5 animate-pulse-soft rounded-full bg-ink-3 [animation-delay:200ms]" />
+                              <span className="size-1.5 animate-pulse-soft rounded-full bg-ink-3 [animation-delay:400ms]" />
+                            </span>
+                          )}
 
-                      {turn.tools.length > 0 && (
-                        <ul className="mt-2 space-y-0.5">
-                          {turn.tools.map((tool) => (
-                            <ToolRowView key={tool.id} tool={tool} />
-                          ))}
-                        </ul>
-                      )}
+                          {turn.tools.length > 0 && (
+                            <ul className="mt-2.5 flex flex-wrap gap-1.5">
+                              {turn.tools.map((tool) => (
+                                <ToolRowView key={tool.id} tool={tool} />
+                              ))}
+                            </ul>
+                          )}
 
-                      {turn.outcomes.length > 0 && (
-                        <ul className="mt-2 space-y-1">
-                          {turn.outcomes.map((outcome, index) => {
-                            const { text, to } = outcomeLabel(outcome);
-                            return (
-                              <li key={`${outcome.type}-${index}`} className="rounded border border-slate-200 bg-white px-2 py-1 text-xs">
-                                {to ? <Link to={to} className="text-blue-700 underline">{text}</Link> : text}
-                              </li>
-                            );
-                          })}
-                        </ul>
-                      )}
+                          {turn.outcomes.length > 0 && (
+                            <ul className="mt-2.5 space-y-1.5">
+                              {turn.outcomes.map((outcome, index) => {
+                                const { text, to } = outcomeLabel(outcome);
+                                return (
+                                  <li
+                                    key={`${outcome.type}-${index}`}
+                                    className="flex items-center gap-1.5 rounded-lg border border-brand-line bg-brand-soft px-2.5 py-1.5 text-xs text-brand-ink"
+                                  >
+                                    <Icon name="check" className="size-3 shrink-0" />
+                                    {to ? <Link to={to} className="font-medium hover:underline">{text}</Link> : text}
+                                  </li>
+                                );
+                              })}
+                            </ul>
+                          )}
 
-                      {turn.error && (
-                        <p role="alert" className="mt-2 rounded border border-red-200 bg-red-50 px-2 py-1 text-xs text-red-700">
-                          {turn.error}
-                        </p>
-                      )}
+                          {turn.error && (
+                            <p
+                              role="alert"
+                              className="mt-2.5 flex items-center gap-1.5 rounded-lg border border-tone-danger-line bg-tone-danger-bg px-2.5 py-1.5 text-xs font-medium text-tone-danger-fg"
+                            >
+                              <Icon name="alert" className="size-3 shrink-0" />
+                              {turn.error}
+                            </p>
+                          )}
+                        </div>
 
-                      {turn.done && turn.runId && principal?.role === "admin" && (
-                        <Link to={`/admin/traces/${turn.runId}`} className="mt-2 inline-block text-xs text-blue-700 underline">
-                          View trace
-                        </Link>
-                      )}
+                        {turn.done && turn.runId && principal?.role === "admin" && (
+                          <Link
+                            to={`/admin/traces/${turn.runId}`}
+                            className="mt-1.5 inline-flex items-center gap-1 text-xs font-medium text-brand-ink hover:underline"
+                          >
+                            <Icon name="activity" className="size-3" />
+                            View trace
+                          </Link>
+                        )}
+                      </div>
                     </li>
                   )}
                 </ul>
               )}
             </div>
 
-            <form onSubmit={handleSend} className="border-t border-slate-200 p-3">
+            <form onSubmit={handleSend} className="border-t border-line bg-surface-2/50 p-3">
               {attachmentError && (
-                <p role="alert" className="mb-2 rounded border border-red-200 bg-red-50 px-2 py-1 text-xs text-red-700">
+                <p
+                  role="alert"
+                  className="mb-2 flex items-center gap-1.5 rounded-lg border border-tone-danger-line bg-tone-danger-bg px-2.5 py-1.5 text-xs font-medium text-tone-danger-fg"
+                >
+                  <Icon name="alert" className="size-3 shrink-0" />
                   {attachmentError}
                 </p>
               )}
               {attachmentName && !attachmentError && (
-                <p className="mb-2 text-xs text-slate-500">Attached: {attachmentName}</p>
+                <p className="mb-2 flex items-center gap-1.5 text-xs text-ink-3">
+                  <Icon name="paperclip" className="size-3" />
+                  Attached: {attachmentName}
+                </p>
               )}
               <div className="flex items-end gap-2">
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  aria-label="Attach a file"
-                  onChange={handleFileChange}
-                  disabled={busy || uploading}
-                  className="text-xs"
-                />
+                <label
+                  className={`btn-secondary size-9 shrink-0 p-0 ${busy || uploading ? "pointer-events-none opacity-50" : "cursor-pointer"}`}
+                  title="Attach a file"
+                >
+                  {uploading ? <Spinner className="size-4" /> : <Icon name="paperclip" className="size-4" />}
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    aria-label="Attach a file"
+                    onChange={handleFileChange}
+                    disabled={busy || uploading}
+                    className="sr-only"
+                  />
+                </label>
                 <textarea
                   aria-label="Message"
                   value={draft}
+                  placeholder="Describe your issue…"
                   onChange={(event) => setDraft(event.target.value)}
                   disabled={busy}
                   rows={2}
-                  className="flex-1 rounded border border-slate-300 px-3 py-2 text-sm disabled:cursor-not-allowed disabled:bg-slate-50"
+                  className="field-input flex-1 resize-none"
                   onKeyDown={(event) => {
                     if (event.key === "Enter" && !event.shiftKey) {
                       event.preventDefault();
@@ -349,8 +453,9 @@ export function Chat() {
                 <button
                   type="submit"
                   disabled={busy || draft.trim().length === 0}
-                  className="rounded bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
+                  className="btn-primary h-9 shrink-0"
                 >
+                  {busy ? <Spinner className="size-4" /> : <Icon name="send" className="size-4" />}
                   {busy ? "Sending…" : "Send"}
                 </button>
               </div>

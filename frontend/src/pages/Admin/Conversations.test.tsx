@@ -423,10 +423,10 @@ describe("Conversations", () => {
     await user.click(await screen.findByRole("button", { name: "Printer will not connect" }));
 
     const runningBadge = (await screen.findByText("running")).closest("span") as HTMLElement;
-    expect(runningBadge).toHaveClass("bg-blue-100");
+    expect(runningBadge).toHaveClass("bg-tone-info-bg");
 
     const okBadge = screen.getByText("ok").closest("span") as HTMLElement;
-    expect(okBadge).toHaveClass("bg-emerald-100");
+    expect(okBadge).toHaveClass("bg-tone-success-bg");
   });
 
   it("paginates the conversations list using the server's total, limit and offset", async () => {

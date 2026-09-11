@@ -5,6 +5,7 @@ import * as admin from "../../api/endpoints/admin";
 import type { ConversationSummary, RunSummary } from "../../api/endpoints/admin";
 import type { MessageView } from "../../api/endpoints/chat";
 import { StateBlock, describeError } from "../../components/StateBlock";
+import { PageHeader } from "../../components/PageHeader";
 import { Table } from "../../components/Table";
 import type { Column } from "../../components/Table";
 import { Badge } from "../../components/Badge";
@@ -75,7 +76,7 @@ function participantLabel(row: ConversationSummary): string {
 function renderContentBlock(block: unknown, key: number): ReactNode {
   if (typeof block === "string") {
     return (
-      <p key={key} className="whitespace-pre-wrap text-sm text-slate-800">
+      <p key={key} className="whitespace-pre-wrap text-sm text-ink">
         {block}
       </p>
     );
@@ -84,20 +85,20 @@ function renderContentBlock(block: unknown, key: number): ReactNode {
     const record = block as Record<string, unknown>;
     if (typeof record.text === "string") {
       return (
-        <p key={key} className="whitespace-pre-wrap text-sm text-slate-800">
+        <p key={key} className="whitespace-pre-wrap text-sm text-ink">
           {record.text}
         </p>
       );
     }
     const kind = typeof record.type === "string" ? record.type : "block";
     return (
-      <p key={key} className="text-sm italic text-slate-500">
+      <p key={key} className="text-sm italic text-ink-3">
         [{kind}]
       </p>
     );
   }
   return (
-    <p key={key} className="text-sm italic text-slate-500">
+    <p key={key} className="text-sm italic text-ink-3">
       [block]
     </p>
   );
@@ -106,10 +107,10 @@ function renderContentBlock(block: unknown, key: number): ReactNode {
 function MessageBubble({ message }: { message: MessageView }) {
   const blocks = Array.isArray(message.content) ? message.content : [message.content];
   return (
-    <div className="rounded border border-slate-200 bg-white p-3">
+    <div className="card p-3.5">
       <div className="mb-1 flex items-center justify-between text-xs">
         <Badge tone={message.role === "assistant" ? "info" : "neutral"}>{message.role}</Badge>
-        <span className="text-slate-500">{dateTime(message.created_at)}</span>
+        <span className="text-ink-3">{dateTime(message.created_at)}</span>
       </div>
       <div className="space-y-1">
         {blocks.map((block, index) => renderContentBlock(block, index))}
@@ -125,14 +126,14 @@ function RunRow({ run, selected, onSelect }: { run: RunSummary; selected: boolea
       onClick={() => onSelect(run.id)}
       aria-current={selected}
       className={`w-full rounded border px-2 py-1.5 text-left text-xs ${
-        selected ? "border-slate-400 bg-slate-100" : "border-slate-200 bg-white hover:bg-slate-50"
+        selected ? "border-brand bg-surface-2" : "border-line bg-surface hover:bg-surface-2"
       }`}
     >
       <div className="flex items-center justify-between gap-2">
-        <span className="font-mono text-slate-800">{run.id}</span>
+        <span className="font-mono text-ink">{run.id}</span>
         <Badge tone={RUN_STATUS_TONE[run.status] ?? "neutral"}>{run.status}</Badge>
       </div>
-      <div className="mt-1 flex items-center gap-2 text-slate-500">
+      <div className="mt-1 flex items-center gap-2 text-ink-3">
         <span>{run.trigger}</span>
         <span>{duration(run.duration_ms)}</span>
         <span>{usd(run.cost_usd)}</span>
@@ -153,7 +154,7 @@ function ConversationRow({
       type="button"
       onClick={() => onSelect(conversation.id)}
       aria-current={selected}
-      className={`rounded px-1.5 py-0.5 text-left text-xs underline ${selected ? "text-slate-900" : "text-blue-700"}`}
+      className={`rounded px-1.5 py-0.5 text-left text-xs underline ${selected ? "text-ink" : "text-brand-ink"}`}
     >
       {conversation.title ?? "(untitled)"}
     </button>
@@ -227,17 +228,20 @@ export function Conversations() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between gap-4">
-        <h1 className="text-lg font-semibold text-slate-900">Conversations</h1>
+      <PageHeader
+        title="Conversations"
+        description="Every chat with the agent, its transcript and the runs behind it."
+        actions={
         <input
           type="search"
           value={q}
           onChange={(event) => handleSearchChange(event.target.value)}
           placeholder="Search by title or participant"
           aria-label="Search conversations"
-          className="w-72 rounded border border-slate-300 px-2 py-1 text-sm"
+          className="field-compact w-72"
         />
-      </div>
+        }
+      />
 
       {listQuery.isLoading ? (
         <StateBlock status="loading" />
@@ -254,8 +258,8 @@ export function Conversations() {
 
       {selectedId !== undefined && (
         <section className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-          <div className="rounded border border-slate-200 bg-white p-4">
-            <h2 className="mb-3 text-sm font-semibold text-slate-900">Transcript</h2>
+          <div className="card p-4">
+            <h2 className="mb-3 text-sm font-semibold text-ink">Transcript</h2>
             {detailQuery.isLoading ? (
               <StateBlock status="loading" />
             ) : detailQuery.isError ? (
@@ -273,8 +277,8 @@ export function Conversations() {
             )}
           </div>
 
-          <div className="rounded border border-slate-200 bg-white p-4">
-            <h2 className="mb-3 text-sm font-semibold text-slate-900">Runs</h2>
+          <div className="card p-4">
+            <h2 className="mb-3 text-sm font-semibold text-ink">Runs</h2>
             {detailQuery.isLoading ? (
               <StateBlock status="loading" />
             ) : detailQuery.isError ? (
@@ -286,7 +290,7 @@ export function Conversations() {
               // never triggered the agent (a guest who only browsed, or a
               // thread closed before any turn ran) is a normal outcome, not
               // a loading gap or a fetch failure.
-              <p className="rounded border border-dashed border-slate-200 p-4 text-center text-sm text-slate-500">
+              <p className="rounded border border-dashed border-line p-4 text-center text-sm text-ink-3">
                 No runs recorded for this conversation.
               </p>
             ) : (
@@ -298,7 +302,7 @@ export function Conversations() {
                 </div>
 
                 {selectedRunId !== undefined && (
-                  <div className="border-t border-slate-100 pt-3">
+                  <div className="border-t border-line/60 pt-3">
                     {traceQuery.isLoading ? (
                       <StateBlock status="loading" />
                     ) : traceQuery.isError ? (
@@ -308,7 +312,7 @@ export function Conversations() {
                     ) : (
                       <>
                         {traceQuery.data.truncated && (
-                          <p className="mb-3 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800">
+                          <p className="mb-3 rounded border border-tone-warning-line bg-tone-warning-bg px-3 py-2 text-xs font-medium text-tone-warning-fg">
                             This trace was truncated: only {tokens(traceQuery.data.span_count)} span
                             {traceQuery.data.span_count === 1 ? "" : "s"} of the full run are shown below.
                           </p>

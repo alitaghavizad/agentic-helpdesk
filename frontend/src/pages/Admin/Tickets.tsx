@@ -3,6 +3,7 @@ import * as tickets from "../../api/endpoints/tickets";
 import type { TicketStatus, TicketSummary } from "../../api/endpoints/tickets";
 import * as admin from "../../api/endpoints/admin";
 import { StateBlock, describeError } from "../../components/StateBlock";
+import { PageHeader } from "../../components/PageHeader";
 import { DossierCard } from "../../components/DossierCard";
 import { score } from "../../lib/format";
 
@@ -37,12 +38,12 @@ const STATUS_LABEL: Record<TicketStatus, string> = {
  */
 function RoutingDecision({ ticket }: { ticket: TicketSummary }) {
   return (
-    <dl className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5 text-xs text-slate-600">
-      <dt className="font-medium text-slate-500">Specialization</dt>
+    <dl className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5 text-xs text-ink-2">
+      <dt className="font-medium text-ink-3">Specialization</dt>
       <dd>{ticket.matched_specialization}</dd>
-      <dt className="font-medium text-slate-500">Rationale</dt>
+      <dt className="font-medium text-ink-3">Rationale</dt>
       <dd>{ticket.assignment_rationale}</dd>
-      <dt className="font-medium text-slate-500">Score</dt>
+      <dt className="font-medium text-ink-3">Score</dt>
       <dd>{score(ticket.assignment_score)}</dd>
     </dl>
   );
@@ -81,10 +82,10 @@ function TicketCard({ ticket }: { ticket: TicketSummary }) {
   const hasDossier = dossierMutation.isSuccess && dossierMutation.data !== undefined;
 
   return (
-    <div className="space-y-2 rounded border border-slate-200 bg-white p-3">
-      <span className="font-mono text-xs text-slate-500">{ticket.ticket_number}</span>
-      <p className="text-sm font-medium text-slate-900">{ticket.title}</p>
-      <p className="text-xs text-slate-500">Assignee: {ticket.assignee_helpdesk_ref || "—"}</p>
+    <div className="card space-y-2 p-3.5">
+      <span className="font-mono text-xs text-ink-3">{ticket.ticket_number}</span>
+      <p className="text-sm font-medium text-ink">{ticket.title}</p>
+      <p className="text-xs text-ink-3">Assignee: {ticket.assignee_helpdesk_ref || "—"}</p>
 
       <RoutingDecision ticket={ticket} />
 
@@ -93,20 +94,20 @@ function TicketCard({ ticket }: { ticket: TicketSummary }) {
           type="button"
           disabled={dossierMutation.isPending}
           onClick={handleGenerate}
-          className="rounded border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+          className="btn-secondary px-2 py-1 text-xs"
         >
           {dossierMutation.isPending ? "Generating dossier…" : hasDossier ? "Regenerate dossier" : "Generate dossier"}
         </button>
-        <p className="text-[11px] text-slate-400">
+        <p className="text-[11px] text-ink-3">
           Runs a live model call and can take up to a minute to return.
         </p>
         {dossierMutation.isPending && (
-          <p role="status" className="text-xs text-slate-500">
+          <p role="status" className="text-xs text-ink-3">
             Generating dossier… this calls the model and can take under a minute. Please wait.
           </p>
         )}
         {dossierMutation.isError && (
-          <p role="alert" className="text-xs text-red-700">
+          <p role="alert" className="text-xs text-tone-danger-fg">
             {describeError(dossierMutation.error)}
           </p>
         )}
@@ -139,7 +140,10 @@ export function Tickets() {
 
   return (
     <div className="space-y-4">
-      <h1 className="text-lg font-semibold text-slate-900">Tickets</h1>
+      <PageHeader
+        title="Tickets"
+        description="Every ticket in the system, with its routing decision and assignee."
+      />
 
       {listQuery.isLoading ? (
         <StateBlock status="loading" />
@@ -153,12 +157,12 @@ export function Tickets() {
             const columnRows = rows.filter((row) => row.status === status);
             return (
               <div key={status} className="space-y-2">
-                <h2 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                <h2 className="text-xs font-semibold uppercase tracking-wide text-ink-3">
                   {STATUS_LABEL[status]} ({columnRows.length})
                 </h2>
                 <div className="space-y-2">
                   {columnRows.length === 0 ? (
-                    <p className="text-xs text-slate-400">No tickets.</p>
+                    <p className="text-xs text-ink-3">No tickets.</p>
                   ) : (
                     columnRows.map((ticket) => <TicketCard key={ticket.id} ticket={ticket} />)
                   )}

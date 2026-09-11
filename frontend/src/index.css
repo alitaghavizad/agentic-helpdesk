@@ -1,1 +1,278 @@
 @import "tailwindcss";
+
+/* Dark mode is driven by a `.dark` class on <html>, set by src/lib/theme.ts,
+   rather than `prefers-color-scheme` alone -- the toggle in the nav bar has
+   to be able to win over the OS setting. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* ---------------------------------------------------------------------------
+   Semantic palette.
+
+   Every colour the app uses is named for its ROLE (canvas, surface, line,
+   ink, brand, and the five status tones), never for its hue. The two blocks
+   below are the only place a literal colour appears; light and dark each
+   define the same variable names, so a component that reads `--color-surface`
+   is correct in both themes without a single `dark:` utility of its own.
+--------------------------------------------------------------------------- */
+
+:root {
+  color-scheme: light;
+
+  --canvas: oklch(0.977 0.004 264);
+  --canvas-accent: oklch(0.955 0.012 274);
+  --surface: oklch(1 0 0);
+  --surface-2: oklch(0.982 0.003 264);
+  --surface-3: oklch(0.962 0.005 264);
+
+  --line: oklch(0.915 0.006 264);
+  --line-strong: oklch(0.855 0.011 264);
+
+  --ink: oklch(0.23 0.028 268);
+  --ink-2: oklch(0.46 0.024 265);
+  --ink-3: oklch(0.617 0.021 263);
+
+  --brand: oklch(0.53 0.204 280);
+  --brand-hover: oklch(0.475 0.2 280);
+  --brand-ink: oklch(0.44 0.19 280);
+  --brand-soft: oklch(0.947 0.028 285);
+  --brand-line: oklch(0.87 0.06 283);
+  --on-brand: oklch(1 0 0);
+
+  --tone-neutral-bg: oklch(0.955 0.004 264);
+  --tone-neutral-fg: oklch(0.42 0.02 265);
+  --tone-neutral-line: oklch(0.885 0.008 264);
+
+  --tone-info-bg: oklch(0.955 0.031 250);
+  --tone-info-fg: oklch(0.47 0.147 251);
+  --tone-info-line: oklch(0.865 0.07 249);
+
+  --tone-success-bg: oklch(0.957 0.043 163);
+  --tone-success-fg: oklch(0.475 0.116 165);
+  --tone-success-line: oklch(0.865 0.083 165);
+
+  --tone-warning-bg: oklch(0.965 0.055 90);
+  --tone-warning-fg: oklch(0.49 0.117 73);
+  --tone-warning-line: oklch(0.878 0.105 85);
+
+  --tone-danger-bg: oklch(0.957 0.03 20);
+  --tone-danger-fg: oklch(0.51 0.184 24);
+  --tone-danger-line: oklch(0.875 0.06 20);
+
+  --elev-ambient: 0 1px 2px oklch(0.25 0.03 265 / 0.05), 0 1px 3px oklch(0.25 0.03 265 / 0.04);
+  --elev-raised: 0 2px 4px oklch(0.25 0.03 265 / 0.04), 0 8px 20px -6px oklch(0.25 0.03 265 / 0.1);
+  --elev-overlay: 0 24px 60px -12px oklch(0.22 0.04 265 / 0.28), 0 8px 20px -8px oklch(0.22 0.04 265 / 0.16);
+}
+
+.dark {
+  color-scheme: dark;
+
+  --canvas: oklch(0.178 0.017 267);
+  --canvas-accent: oklch(0.208 0.024 271);
+  --surface: oklch(0.218 0.019 267);
+  --surface-2: oklch(0.247 0.021 267);
+  --surface-3: oklch(0.282 0.023 267);
+
+  --line: oklch(0.303 0.021 267);
+  --line-strong: oklch(0.383 0.025 267);
+
+  --ink: oklch(0.945 0.007 265);
+  --ink-2: oklch(0.775 0.019 265);
+  --ink-3: oklch(0.638 0.023 265);
+
+  --brand: oklch(0.685 0.158 284);
+  --brand-hover: oklch(0.742 0.145 284);
+  --brand-ink: oklch(0.79 0.12 284);
+  --brand-soft: oklch(0.3 0.068 283);
+  --brand-line: oklch(0.42 0.105 283);
+  --on-brand: oklch(0.16 0.03 280);
+
+  --tone-neutral-bg: oklch(0.288 0.018 266);
+  --tone-neutral-fg: oklch(0.815 0.016 265);
+  --tone-neutral-line: oklch(0.372 0.02 266);
+
+  --tone-info-bg: oklch(0.316 0.064 252);
+  --tone-info-fg: oklch(0.808 0.096 244);
+  --tone-info-line: oklch(0.424 0.094 250);
+
+  --tone-success-bg: oklch(0.308 0.058 168);
+  --tone-success-fg: oklch(0.815 0.13 166);
+  --tone-success-line: oklch(0.412 0.08 167);
+
+  --tone-warning-bg: oklch(0.325 0.058 76);
+  --tone-warning-fg: oklch(0.845 0.126 88);
+  --tone-warning-line: oklch(0.436 0.079 76);
+
+  --tone-danger-bg: oklch(0.322 0.078 22);
+  --tone-danger-fg: oklch(0.798 0.107 20);
+  --tone-danger-line: oklch(0.44 0.115 22);
+
+  --elev-ambient: 0 1px 2px oklch(0 0 0 / 0.4), 0 1px 3px oklch(0 0 0 / 0.3);
+  --elev-raised: 0 2px 4px oklch(0 0 0 / 0.35), 0 8px 20px -6px oklch(0 0 0 / 0.5);
+  --elev-overlay: 0 24px 60px -12px oklch(0 0 0 / 0.7), 0 8px 20px -8px oklch(0 0 0 / 0.5);
+}
+
+/* `inline` so each utility compiles to the raw `var(--…)` reference instead
+   of the value resolved at build time -- that indirection is exactly what
+   lets `.dark` re-point the same class to a different colour at runtime. */
+@theme inline {
+  --color-canvas: var(--canvas);
+  --color-canvas-accent: var(--canvas-accent);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+
+  --color-brand: var(--brand);
+  --color-brand-hover: var(--brand-hover);
+  --color-brand-ink: var(--brand-ink);
+  --color-brand-soft: var(--brand-soft);
+  --color-brand-line: var(--brand-line);
+  --color-on-brand: var(--on-brand);
+
+  --color-tone-neutral-bg: var(--tone-neutral-bg);
+  --color-tone-neutral-fg: var(--tone-neutral-fg);
+  --color-tone-neutral-line: var(--tone-neutral-line);
+  --color-tone-info-bg: var(--tone-info-bg);
+  --color-tone-info-fg: var(--tone-info-fg);
+  --color-tone-info-line: var(--tone-info-line);
+  --color-tone-success-bg: var(--tone-success-bg);
+  --color-tone-success-fg: var(--tone-success-fg);
+  --color-tone-success-line: var(--tone-success-line);
+  --color-tone-warning-bg: var(--tone-warning-bg);
+  --color-tone-warning-fg: var(--tone-warning-fg);
+  --color-tone-warning-line: var(--tone-warning-line);
+  --color-tone-danger-bg: var(--tone-danger-bg);
+  --color-tone-danger-fg: var(--tone-danger-fg);
+  --color-tone-danger-line: var(--tone-danger-line);
+
+  --shadow-ambient: var(--elev-ambient);
+  --shadow-raised: var(--elev-raised);
+  --shadow-overlay: var(--elev-overlay);
+
+  --font-sans: ui-sans-serif, "Inter", "Segoe UI", system-ui, -apple-system,
+    "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "JetBrains Mono", "SFMono-Regular", "Menlo",
+    "Consolas", monospace;
+
+  --radius-card: 0.75rem;
+
+  --animate-rise: rise 0.22s cubic-bezier(0.22, 1, 0.36, 1);
+  --animate-fade: fade 0.16s ease-out;
+  --animate-pulse-soft: pulse-soft 1.6s ease-in-out infinite;
+}
+
+@keyframes rise {
+  from { opacity: 0; transform: translateY(6px) scale(0.985); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes pulse-soft {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+@layer base {
+  html {
+    background-color: var(--canvas);
+  }
+
+  body {
+    font-family: var(--font-sans);
+    background-color: var(--canvas);
+    color: var(--ink);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* One focus treatment for the whole app, on keyboard focus only, so no
+     control has to remember to bring its own. */
+  :focus-visible {
+    outline: 2px solid var(--brand);
+    outline-offset: 2px;
+    border-radius: 0.375rem;
+  }
+
+  ::selection {
+    background-color: var(--brand-soft);
+    color: var(--brand-ink);
+  }
+
+  /* Scrollbars inherit the theme instead of staying stark white in dark
+     mode, which is the detail that gives away a bolted-on dark theme. */
+  * {
+    scrollbar-color: var(--line-strong) transparent;
+    scrollbar-width: thin;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
+
+/* Registered with `@utility`, not as plain `@layer components` classes, so
+   they are real utilities: that is what lets `btn-primary` build on `btn`
+   through `@apply` instead of restating its whole base. */
+
+@utility card {
+  @apply rounded-card border border-line bg-surface shadow-ambient;
+}
+
+@utility btn {
+  @apply inline-flex items-center justify-center gap-1.5 rounded-lg px-3 py-1.5
+    text-sm font-medium whitespace-nowrap transition
+    disabled:cursor-not-allowed disabled:opacity-50;
+}
+
+@utility btn-primary {
+  @apply btn bg-brand text-on-brand shadow-ambient
+    hover:not-disabled:bg-brand-hover active:not-disabled:translate-y-px;
+}
+
+@utility btn-secondary {
+  @apply btn border border-line bg-surface text-ink-2
+    hover:not-disabled:border-line-strong hover:not-disabled:bg-surface-2 hover:not-disabled:text-ink;
+}
+
+@utility btn-ghost {
+  @apply btn text-ink-2 hover:not-disabled:bg-surface-2 hover:not-disabled:text-ink;
+}
+
+@utility btn-danger {
+  @apply btn bg-tone-danger-fg text-white shadow-ambient
+    hover:not-disabled:brightness-110 active:not-disabled:translate-y-px;
+}
+
+@utility field-label {
+  @apply mb-1.5 block text-xs font-semibold tracking-wide text-ink-2 uppercase;
+}
+
+@utility field-input {
+  @apply w-full rounded-lg border border-line bg-surface px-3 py-2 text-sm text-ink
+    transition placeholder:text-ink-3
+    focus:border-brand focus:ring-2 focus:ring-brand/25 focus:outline-none
+    disabled:cursor-not-allowed disabled:bg-surface-2 disabled:text-ink-3;
+}
+
+@utility eyebrow {
+  @apply text-xs font-semibold tracking-wider text-ink-3 uppercase;
+}
+
+/* The compact form control used inside filter bars and table cells, where
+   `field-input`'s full padding would blow up the row height. */
+@utility field-compact {
+  @apply rounded-lg border border-line bg-surface px-2 py-1 text-sm text-ink transition
+    focus:border-brand focus:ring-2 focus:ring-brand/25 focus:outline-none;
+}

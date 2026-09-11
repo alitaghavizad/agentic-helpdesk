@@ -12,7 +12,12 @@ describe("usd", () => {
     // Most single spans cost well under a cent; rounding to 2dp would
     // render a whole trace as a column of $0.00.
     expect(usd(0.000123)).toBe("$0.000123");
-    expect(usd(0)).toBe("$0.000000");
+  });
+
+  it("renders an exact zero as plain dollars", () => {
+    // Zero is not a sub-cent amount six decimals would rescue -- it is
+    // nothing, and "$0.000000" on a stat tile is noise.
+    expect(usd(0)).toBe("$0.00");
   });
 
   it("switches to two decimals above a dollar", () => {

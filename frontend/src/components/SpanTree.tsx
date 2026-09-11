@@ -3,6 +3,7 @@ import type { components } from "../api/schema";
 import { Badge } from "./Badge";
 import type { BadgeTone } from "./Badge";
 import { JsonBlock } from "./JsonBlock";
+import { Icon } from "./Icon";
 import { duration, tokens, usd } from "../lib/format";
 
 export type SpanNode = components["schemas"]["SpanNode"];
@@ -43,45 +44,48 @@ function SpanRow({ node, depth, totalMs, expanded, onToggle }: SpanRowProps) {
     <div role="treeitem" aria-level={depth + 1} aria-expanded={isExpanded}>
       <div
         style={{ paddingLeft: `${depth * 16}px` }}
-        className="flex flex-wrap items-center gap-2 border-b border-slate-100 py-1.5 text-xs"
+        className="flex flex-wrap items-center gap-2 border-b border-line/60 py-2 text-xs transition-colors hover:bg-surface-2"
       >
         <button
           type="button"
           onClick={() => onToggle(node.id)}
           aria-label={`${isExpanded ? "Collapse" : "Expand"} ${node.name}`}
-          className="w-4 shrink-0 text-slate-400 hover:text-slate-700"
+          className="grid size-4 shrink-0 place-items-center rounded text-ink-3 transition hover:text-ink"
         >
-          {isExpanded ? "▾" : "▸"}
+          <Icon
+            name="chevron-right"
+            className={`size-3.5 transition-transform ${isExpanded ? "rotate-90" : ""}`}
+          />
         </button>
         <Badge tone="neutral">{node.kind}</Badge>
-        <span className="font-medium text-slate-800">{node.name}</span>
+        <span className="font-medium text-ink">{node.name}</span>
 
-        <div className="h-2.5 w-24 shrink-0 rounded bg-slate-100">
+        <div className="h-1.5 w-24 shrink-0 overflow-hidden rounded-full bg-surface-3">
           <div
             role="img"
             aria-label={`${node.name} duration: ${duration(node.duration_ms)}`}
-            className="h-2.5 rounded bg-slate-600"
+            className="h-1.5 rounded-full bg-brand"
             style={{ width: `${widthPct}%` }}
           />
         </div>
-        <span className="w-16 shrink-0 text-slate-500">{duration(node.duration_ms)}</span>
+        <span className="w-16 shrink-0 text-ink-2 tabular-nums">{duration(node.duration_ms)}</span>
 
-        <span className="text-slate-500">{node.model ?? "—"}</span>
-        <span className="text-slate-500">in {tokens(node.input_tokens)}</span>
-        <span className="text-slate-500">out {tokens(node.output_tokens)}</span>
-        <span className="text-slate-500">cache-r {tokens(node.cache_read_tokens)}</span>
-        <span className="text-slate-500">cache-w {tokens(node.cache_write_tokens)}</span>
+        <span className="text-ink-3">{node.model ?? "—"}</span>
+        <span className="text-ink-3">in {tokens(node.input_tokens)}</span>
+        <span className="text-ink-3">out {tokens(node.output_tokens)}</span>
+        <span className="text-ink-3">cache-r {tokens(node.cache_read_tokens)}</span>
+        <span className="text-ink-3">cache-w {tokens(node.cache_write_tokens)}</span>
         {/* Never a raw "$0.00" for a null cost -- usd(null) reads "unpriced",
             the one thing standing between this and a confidently wrong
             number (parent spec §17). */}
-        <span className="font-medium text-slate-700">{usd(node.cost_usd)}</span>
+        <span className="font-medium text-ink-2 tabular-nums">{usd(node.cost_usd)}</span>
 
         <Badge tone={STATUS_TONE[node.status] ?? "neutral"}>{node.status}</Badge>
-        {node.error && <span className="text-red-700">{node.error}</span>}
+        {node.error && <span className="text-tone-danger-fg">{node.error}</span>}
       </div>
 
       {isExpanded && (
-        <div style={{ paddingLeft: `${(depth + 1) * 16}px` }} className="border-b border-slate-100 py-2">
+        <div style={{ paddingLeft: `${(depth + 1) * 16}px` }} className="border-b border-line/60 py-2">
           <JsonBlock label="Input" value={node.input} />
           <JsonBlock label="Output" value={node.output} />
         </div>
@@ -123,7 +127,7 @@ export function SpanTree({ roots, totalMs }: { roots: SpanNode[]; totalMs: numbe
   }
 
   if (roots.length === 0) {
-    return <p className="text-sm text-slate-500">No spans recorded for this run.</p>;
+    return <p className="text-sm text-ink-3">No spans recorded for this run.</p>;
   }
 
   return (

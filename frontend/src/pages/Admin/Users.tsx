@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as admin from "../../api/endpoints/admin";
 import type { UserPatch, UserSummary, UsersPage } from "../../api/endpoints/admin";
 import { StateBlock, describeError } from "../../components/StateBlock";
+import { PageHeader } from "../../components/PageHeader";
 import { Table } from "../../components/Table";
 import type { Column } from "../../components/Table";
 import { Badge } from "../../components/Badge";
@@ -91,7 +92,7 @@ export function Users() {
           onChange={(event) =>
             patchMutation.mutate({ id: row.id, patch: { role: event.target.value as UserPatch["role"] } })
           }
-          className="rounded border border-slate-300 px-1 py-0.5 text-xs"
+          className="field-compact px-1.5 py-0.5 text-xs"
         >
           {ROLES.map((role) => (
             <option key={role} value={role}>
@@ -114,7 +115,7 @@ export function Users() {
               patch: { clearance: event.target.value as UserPatch["clearance"] },
             })
           }
-          className="rounded border border-slate-300 px-1 py-0.5 text-xs"
+          className="field-compact px-1.5 py-0.5 text-xs"
         >
           {/* A row with no clearance on record needs a selectable value
               that maps to nothing real -- PATCH has no way to explicitly
@@ -145,10 +146,13 @@ export function Users() {
 
   return (
     <div className="space-y-4">
-      <h1 className="text-lg font-semibold text-slate-900">Users</h1>
+      <PageHeader
+        title="Users"
+        description="Directory accounts, their role, clearance and department."
+      />
 
       {patchMutation.isError && (
-        <p role="alert" className="text-xs text-red-700">
+        <p role="alert" className="text-xs text-tone-danger-fg">
           {describeError(patchMutation.error)}
         </p>
       )}

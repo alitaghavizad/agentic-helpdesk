@@ -2,6 +2,7 @@ import { Navigate, Outlet, Route, Routes } from "react-router-dom";
 import { landingFor, useAuth } from "./auth/AuthContext";
 import { RequireRole } from "./auth/RequireRole";
 import { NavBar } from "./components/NavBar";
+import { Icon } from "./components/Icon";
 import { Chat } from "./pages/Chat";
 import { Login } from "./pages/Login";
 import { Tickets } from "./pages/Tickets";
@@ -18,9 +19,9 @@ import { Audit } from "./pages/Admin/Audit";
 /** NavBar plus the routed page. Only signed-in routes get a shell. */
 function Shell() {
   return (
-    <div className="min-h-screen bg-slate-50">
+    <div className="min-h-screen bg-canvas">
       <NavBar />
-      <main className="mx-auto max-w-6xl p-6">
+      <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 sm:py-8">
         <Outlet />
       </main>
     </div>
@@ -35,8 +36,12 @@ function Home() {
 
 function NotFound() {
   return (
-    <div className="flex min-h-screen items-center justify-center text-slate-500">
-      <p>Page not found.</p>
+    <div className="flex min-h-[60vh] flex-col items-center justify-center gap-3 text-center">
+      <span aria-hidden="true" className="grid size-12 place-items-center rounded-full bg-surface-2 text-ink-3">
+        <Icon name="alert" className="size-5" />
+      </span>
+      <p className="text-lg font-semibold text-ink">Page not found.</p>
+      <p className="text-sm text-ink-3">The page you were looking for does not exist.</p>
     </div>
   );
 }
