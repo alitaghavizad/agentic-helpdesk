@@ -73,43 +73,59 @@ export function Login() {
     <div className="grid min-h-screen bg-canvas lg:grid-cols-[1.1fr_1fr]">
       {/* Brand panel. Hidden below `lg` rather than stacked above the form:
           on a phone it would push the actual sign-in fields below the fold. */}
-      <aside className="relative hidden overflow-hidden bg-brand p-12 text-on-brand lg:flex lg:flex-col lg:justify-between">
+      {/* A deep ink ground with the brand read as a single off-centre glow,
+          rather than a flat fill of saturated brand with a white blur blob
+          in the corner -- that blob-on-gradient treatment is the stock
+          look, and at full chroma across half a 1440px screen the fill was
+          the loudest thing on a sign-in page. The grid and the grain give
+          the surface something to catch light on. */}
+      <aside className="relative hidden overflow-hidden p-12 text-white lg:flex lg:flex-col lg:justify-between">
+        <div aria-hidden="true" className="absolute inset-0 bg-[oklch(0.205_0.031_293)]" />
         <div
           aria-hidden="true"
-          className="pointer-events-none absolute -top-24 -right-20 size-[28rem] rounded-full bg-white/10 blur-3xl"
+          className="absolute inset-0 bg-[radial-gradient(120%_85%_at_18%_8%,oklch(0.46_0.13_293/0.85)_0%,transparent_62%)]"
         />
         <div
           aria-hidden="true"
-          className="pointer-events-none absolute -bottom-32 -left-16 size-[24rem] rounded-full bg-black/10 blur-3xl"
+          className="absolute inset-0 bg-[radial-gradient(90%_70%_at_92%_100%,oklch(0.34_0.1_282/0.7)_0%,transparent_58%)]"
+        />
+        {/* A 32px rule grid, masked so it fades out before the edges. Gives
+            the panel a sense of surface without reading as decoration. */}
+        <div
+          aria-hidden="true"
+          className="absolute inset-0 opacity-[0.055]
+            [background-image:linear-gradient(to_right,white_1px,transparent_1px),linear-gradient(to_bottom,white_1px,transparent_1px)]
+            [background-size:32px_32px]
+            [mask-image:radial-gradient(115%_95%_at_35%_25%,black_35%,transparent_78%)]"
         />
 
         <div className="relative flex items-center gap-2.5">
-          <span className="grid size-9 place-items-center rounded-xl bg-white/15 backdrop-blur">
+          <span className="grid size-9 place-items-center rounded-xl bg-white/12 ring-1 ring-inset ring-white/20 backdrop-blur">
             <Icon name="sparkles" className="size-5" />
           </span>
-          <span className="text-base font-semibold tracking-tight">Agentic Helpdesk</span>
+          <span className="text-base font-semibold tracking-[-0.014em]">Agentic Helpdesk</span>
         </div>
 
         <div className="relative max-w-md">
-          <h2 className="text-3xl leading-tight font-semibold tracking-tight text-balance">
+          <h2 className="text-[2.5rem] leading-[1.08] font-semibold tracking-[-0.028em] text-balance">
             IT support that reads the docs so nobody has to.
           </h2>
-          <ul className="mt-8 space-y-5">
+          <ul className="mt-9 space-y-5">
             {HIGHLIGHTS.map((item) => (
               <li key={item.title} className="flex gap-3.5">
-                <span className="mt-0.5 grid size-8 shrink-0 place-items-center rounded-lg bg-white/15 backdrop-blur">
+                <span className="mt-0.5 grid size-8 shrink-0 place-items-center rounded-md bg-white/10 ring-1 ring-inset ring-white/15 backdrop-blur">
                   <Icon name={item.icon} className="size-4" />
                 </span>
                 <span>
                   <span className="block text-sm font-semibold">{item.title}</span>
-                  <span className="block text-sm text-on-brand/75">{item.body}</span>
+                  <span className="block text-sm leading-relaxed text-white/70 text-pretty">{item.body}</span>
                 </span>
               </li>
             ))}
           </ul>
         </div>
 
-        <p className="relative text-xs text-on-brand/60">
+        <p className="relative text-xs tracking-wide text-white/45">
           Northstar internal systems · authorised use only
         </p>
       </aside>
@@ -123,8 +139,10 @@ export function Login() {
             <span className="text-base font-semibold tracking-tight text-ink">Agentic Helpdesk</span>
           </div>
 
-          <h1 className="text-2xl font-semibold tracking-tight text-ink">Welcome back</h1>
-          <p className="mt-1.5 mb-7 text-sm text-ink-3">
+          <h1 className="text-[1.75rem] leading-tight font-semibold tracking-[-0.026em] text-ink">
+            Welcome back
+          </h1>
+          <p className="mt-2 mb-7 text-sm leading-relaxed text-ink-3 text-pretty">
             Sign in with your Northstar account, or continue as a guest.
           </p>
 

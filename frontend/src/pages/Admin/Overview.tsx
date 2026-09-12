@@ -21,19 +21,28 @@ function Counter({
   accent?: boolean;
 }) {
   return (
-    <div className="card p-4 transition hover:shadow-raised">
+    // The figure leads and the label sits under it. Reading order on a
+    // counter row is value-first -- an admin scans the five numbers, then
+    // looks up what the interesting one was. Label-on-top forced that scan
+    // through five lines of small grey text first.
+    <div
+      className="card group p-4 transition duration-200
+        hover:-translate-y-px hover:border-line-strong hover:shadow-raised"
+    >
       <div className="flex items-start justify-between gap-3">
-        <p className="text-xs font-medium text-ink-3">{label}</p>
+        <p className="metric">{value}</p>
         <span
           aria-hidden="true"
-          className={`grid size-7 shrink-0 place-items-center rounded-lg ${
-            accent ? "bg-brand-soft text-brand-ink" : "bg-surface-2 text-ink-3"
+          className={`grid size-7 shrink-0 place-items-center rounded-md transition-colors ${
+            accent
+              ? "bg-brand-soft text-brand-ink"
+              : "bg-surface-2 text-ink-3 group-hover:bg-surface-3 group-hover:text-ink-2"
           }`}
         >
           <Icon name={icon} className="size-3.5" />
         </span>
       </div>
-      <p className="mt-2 text-2xl font-semibold tracking-tight text-ink tabular-nums">{value}</p>
+      <p className="mt-2 text-xs font-medium text-ink-3 text-pretty">{label}</p>
     </div>
   );
 }
@@ -108,20 +117,26 @@ export function Overview() {
       </div>
 
       <div className="card mt-4 p-4">
-        <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-ink">
+        <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold tracking-[-0.006em] text-ink">
           <Icon name="activity" className="size-4 text-ink-3" />
           Live activity
         </h2>
         {events.length === 0 ? (
-          <p className="py-6 text-center text-sm text-ink-3">No run activity yet.</p>
+          <div className="card-inset flex flex-col items-center gap-2 px-4 py-8 text-center">
+            <span aria-hidden="true" className="grid size-9 place-items-center rounded-full bg-surface-3 text-ink-3">
+              <Icon name="activity" className="size-4" />
+            </span>
+            <p className="text-sm text-ink-3">No run activity yet.</p>
+            <p className="text-xs text-ink-3/80">Agent runs appear here the moment they start.</p>
+          </div>
         ) : (
           <ul className="divide-y divide-line/60 text-sm">
             {events.map((event, index) => (
               <li
                 key={`${event.id}-${events.length - index}`}
-                className="flex animate-fade items-center justify-between gap-3 py-2"
+                className="flex animate-fade items-center justify-between gap-3 py-2.5"
               >
-                <span className="truncate font-mono text-xs text-ink-3">{event.id}</span>
+                <span className="truncate font-mono text-xs tracking-tight text-ink-3">{event.id}</span>
                 <Badge tone={RUN_STATUS_TONE[event.status ?? ""] ?? "neutral"}>
                   {event.status ?? event.type}
                 </Badge>

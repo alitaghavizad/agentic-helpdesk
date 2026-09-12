@@ -10,6 +10,26 @@ describe("StateBlock", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
+  it("draws skeleton placeholders while loading, marked aria-busy", () => {
+    // The loading block is a set of shape-matched placeholders, not a
+    // spinner. The bars are decorative, so what has to survive is that the
+    // region announces itself as busy and still carries the label -- a
+    // screen reader gets nothing from the bars themselves.
+    const { container } = render(<StateBlock status="loading" />);
+    const region = screen.getByRole("status");
+    expect(region).toHaveAttribute("aria-busy", "true");
+    expect(container.querySelectorAll(".skeleton").length).toBeGreaterThan(0);
+  });
+
+  it("keeps the loading placeholders out of the accessibility tree", () => {
+    const { container } = render(<StateBlock status="loading" />);
+    // Every skeleton bar must sit under an aria-hidden subtree; a wall of
+    // unlabelled divs announced individually is worse than no feedback.
+    for (const bar of container.querySelectorAll(".skeleton")) {
+      expect(bar.closest("[aria-hidden='true']")).not.toBeNull();
+    }
+  });
+
   it("renders the empty state distinguishably", () => {
     render(<StateBlock status="empty" />);
     expect(screen.getByText("Nothing to show yet.")).toBeInTheDocument();

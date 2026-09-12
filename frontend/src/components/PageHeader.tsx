@@ -16,10 +16,14 @@ export function PageHeader({
   actions?: ReactNode;
 }) {
   return (
-    <div className="mb-5 flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
+    <div className="mb-6 flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
       <div className="min-w-0">
-        <h1 className="text-xl font-semibold tracking-tight text-ink">{title}</h1>
-        {description && <p className="mt-1 text-sm text-ink-3">{description}</p>}
+        <h1 className="page-title">{title}</h1>
+        {/* `max-w-prose` caps the line at roughly 65 characters. Without it
+            the description runs the full 80rem of the shell on a wide
+            monitor, which is far past the length an eye tracks back from
+            comfortably. */}
+        {description && <p className="mt-1.5 max-w-prose text-sm text-ink-3 text-pretty">{description}</p>}
       </div>
       {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
     </div>

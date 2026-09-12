@@ -31,11 +31,11 @@
   --ink-2: oklch(0.46 0.024 265);
   --ink-3: oklch(0.617 0.021 263);
 
-  --brand: oklch(0.53 0.204 280);
-  --brand-hover: oklch(0.475 0.2 280);
-  --brand-ink: oklch(0.44 0.19 280);
-  --brand-soft: oklch(0.947 0.028 285);
-  --brand-line: oklch(0.87 0.06 283);
+  --brand: oklch(0.505 0.138 293);
+  --brand-hover: oklch(0.448 0.132 293);
+  --brand-ink: oklch(0.425 0.126 293);
+  --brand-soft: oklch(0.955 0.021 293);
+  --brand-line: oklch(0.878 0.045 293);
   --on-brand: oklch(1 0 0);
 
   --tone-neutral-bg: oklch(0.955 0.004 264);
@@ -79,12 +79,12 @@
   --ink-2: oklch(0.775 0.019 265);
   --ink-3: oklch(0.638 0.023 265);
 
-  --brand: oklch(0.685 0.158 284);
-  --brand-hover: oklch(0.742 0.145 284);
-  --brand-ink: oklch(0.79 0.12 284);
-  --brand-soft: oklch(0.3 0.068 283);
-  --brand-line: oklch(0.42 0.105 283);
-  --on-brand: oklch(0.16 0.03 280);
+  --brand: oklch(0.706 0.122 293);
+  --brand-hover: oklch(0.762 0.112 293);
+  --brand-ink: oklch(0.806 0.094 293);
+  --brand-soft: oklch(0.305 0.052 293);
+  --brand-line: oklch(0.425 0.082 293);
+  --on-brand: oklch(0.165 0.026 293);
 
   --tone-neutral-bg: oklch(0.288 0.018 266);
   --tone-neutral-fg: oklch(0.815 0.016 265);
@@ -155,16 +155,26 @@
   --shadow-raised: var(--elev-raised);
   --shadow-overlay: var(--elev-overlay);
 
-  --font-sans: ui-sans-serif, "Inter", "Segoe UI", system-ui, -apple-system,
-    "Helvetica Neue", Arial, sans-serif;
-  --font-mono: ui-monospace, "JetBrains Mono", "SFMono-Regular", "Menlo",
+  --font-sans: "Geist Variable", ui-sans-serif, "Segoe UI", system-ui,
+    -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "Geist Mono Variable", ui-monospace, "SFMono-Regular", "Menlo",
     "Consolas", monospace;
 
+  /* A radius SCALE rather than one token. Nested elements take a tighter
+     radius than the surface containing them -- a chip at the same 0.75rem
+     as its card reads as a sticker sitting on top of it rather than as part
+     of it. `--radius-card` keeps its name and value so existing `rounded-card`
+     call sites are untouched. */
+  --radius-xs: 0.25rem;
+  --radius-sm: 0.375rem;
+  --radius-md: 0.5rem;
   --radius-card: 0.75rem;
+  --radius-panel: 1rem;
 
   --animate-rise: rise 0.22s cubic-bezier(0.22, 1, 0.36, 1);
   --animate-fade: fade 0.16s ease-out;
   --animate-pulse-soft: pulse-soft 1.6s ease-in-out infinite;
+  --animate-shimmer: shimmer 1.8s linear infinite;
 }
 
 @keyframes rise {
@@ -178,6 +188,13 @@
 @keyframes pulse-soft {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.35; }
+}
+/* Travels a highlight across the placeholder rather than blinking the whole
+   block, so a screen of stacked skeletons reads as one loading surface
+   instead of a wall of independently flashing rectangles. */
+@keyframes shimmer {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
 }
 
 @layer base {
@@ -211,6 +228,36 @@
   * {
     scrollbar-color: var(--line-strong) transparent;
     scrollbar-width: thin;
+  }
+
+  /* Geist ships proportional figures by default. This is a console whose
+     screens are mostly numbers in vertical runs -- spend, latency, token
+     counts, error rates -- and proportional digits make those columns
+     ragged because a `1` is narrower than a `0`. Tabular figures are the
+     correct default here; prose is unaffected because the digits only
+     differ in advance width, not in shape. */
+  body {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "cv11";
+  }
+
+  /* A fixed, non-interactive grain layer. Flat vector surfaces read as
+     sterile at large areas; ~2% noise is below the threshold of being
+     noticed as texture but removes the plastic flatness. Sized in device
+     pixels and repeated, so it costs one small tile, not a full-screen
+     image. */
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    opacity: 0.022;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.82' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+
+  .dark body::before {
+    opacity: 0.03;
   }
 
   @media (prefers-reduced-motion: reduce) {
@@ -285,4 +332,43 @@
 @utility field-compact {
   @apply rounded-lg border border-line bg-surface px-2 py-1 text-sm text-ink transition
     focus:border-brand focus:ring-2 focus:ring-brand/25 focus:outline-none;
+}
+
+/* A placeholder that matches the SHAPE of what is loading, rather than a
+   spinner that matches nothing. Callers size it; this supplies the surface
+   and the travelling highlight. */
+@utility skeleton {
+  @apply relative overflow-hidden rounded-md bg-surface-3;
+  background-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    var(--surface-2) 40%,
+    var(--surface-2) 60%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  animation: var(--animate-shimmer);
+}
+
+/* The page-level title. Bigger and tighter than the old `text-xl`: at a
+   19px h1 with default tracking the title carried no more weight than the
+   section headings under it, so every screen opened flat. Negative tracking
+   is what stops large text reading as merely scaled-up body copy. */
+@utility page-title {
+  @apply text-2xl leading-tight font-semibold tracking-[-0.019em] text-ink text-balance;
+}
+
+/* Display figure for counters and headline metrics. `tabular-nums` is
+   inherited from body, but stated here too so the class is correct if it is
+   ever used outside it. */
+@utility metric {
+  @apply text-[1.75rem] leading-none font-semibold tracking-[-0.024em] text-ink tabular-nums;
+}
+
+/* A recessed panel for content nested INSIDE a card (a log body, a JSON
+   block, a chat transcript). Tighter radius than its container per the
+   radius scale, and it sinks rather than lifts -- nesting a raised card in
+   a raised card is what makes dense screens read as rubble. */
+@utility card-inset {
+  @apply rounded-md border border-line/70 bg-surface-2;
 }
