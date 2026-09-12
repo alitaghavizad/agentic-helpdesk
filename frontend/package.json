@@ -16,6 +16,8 @@
     "api:check": "cd ../backend && uv run python scripts/dump_openapi.py && cd ../frontend && npm run api:generate && git diff --exit-code openapi.json src/api/schema.d.ts"
   },
   "dependencies": {
+    "@fontsource-variable/geist": "^5.3.0",
+    "@fontsource-variable/geist-mono": "^5.3.0",
     "@tanstack/react-query": "^5.102.8",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
