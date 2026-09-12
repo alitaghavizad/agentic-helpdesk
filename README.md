@@ -35,7 +35,7 @@ Then open **http://localhost:5173** and sign in as `admin` / `admin`.
 | service | port | what it is |
 | --- | --- | --- |
 | `frontend` | 5173 | the built React app, served by nginx |
-| `backend` | 8080 | FastAPI |
+| `backend` | `BACKEND_PORT`, default 8080 | FastAPI |
 | `postgres18` | 5432 | Postgres 18 |
 | `chroma` | 8000 | Chroma vector store |
 
@@ -56,8 +56,9 @@ Things worth knowing:
 - **`VITE_API_BASE` is baked in at build time**, not read at runtime — Vite
   inlines `import.meta.env`. It has to be the URL your *browser* uses
   (`http://localhost:8080`), never the `backend` service name, which only
-  resolves inside the compose network. Change it and rebuild:
-  `VITE_API_BASE=... docker compose build frontend`.
+  resolves inside the compose network. It defaults to `BACKEND_PORT`, so
+  moving the backend off 8080 needs no second setting — but it is baked in,
+  so rebuild after changing either: `docker compose build frontend`.
 - `docker compose down -v` throws away the database, the vector store and
   uploaded attachments; plain `down` keeps all three.
 
