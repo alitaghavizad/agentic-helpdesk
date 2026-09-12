@@ -88,8 +88,19 @@ services:
       # Until it has been run once, the agent answers with no documents to
       # retrieve from.
       RUN_INGEST: ${RUN_INGEST:-false}
+      # Pinned for the same reason DATABASE_URL and CHROMA_URL are: `.env`
+      # is read by `env_file` above, and its BACKEND_PORT describes where
+      # the backend listens ON YOUR MACHINE (backend/tasks.py passes it to
+      # uvicorn for `make dev`). Inside the container the port is fixed at
+      # 8080 by the image's CMD and EXPOSE, so letting the host value
+      # through left the container claiming a port it was not listening on.
+      BACKEND_PORT: 8080
     ports:
-      - "8080:8080"
+      # Host side follows BACKEND_PORT so one knob moves the backend for
+      # every way of running it -- `make dev`, compose, and a compose
+      # backend with a local `npm run dev` in front of it. Container side
+      # stays 8080 to match CMD, EXPOSE and the healthcheck below.
+      - "${BACKEND_PORT:-8080}:8080"
     volumes:
       # Uploaded attachments are content-addressed files on disk, not rows,
       # so they need to outlive the container like the databases do.
@@ -114,7 +125,7 @@ services:
       args:
         # Baked in at build time (Vite inlines import.meta.env), and read by
         # the browser, so it must be the HOST-visible backend URL.
-        VITE_API_BASE: ${VITE_API_BASE:-http://localhost:8080}
+        VITE_API_BASE: ${VITE_API_BASE:-http://localhost:${BACKEND_PORT:-8080}}
     container_name: helpdesk-frontend
     ports:
       - "5173:80"
